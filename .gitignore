@@ -23,6 +23,10 @@ VGAGRAPH*
 VGADICT*
 VGAHEAD*
 
+# verification artifacts
+/.playwright-mcp/
+/ethdoom-live.png
+
 # editor / os
 .DS_Store
 *.swp

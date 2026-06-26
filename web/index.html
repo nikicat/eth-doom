@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>eth-doom — on-chain Wolf3D</title>
+    <style>
+      body { margin: 0; background: #111; color: #cdd; font: 14px ui-monospace, monospace; }
+      .wrap { display: flex; gap: 16px; padding: 16px; flex-wrap: wrap; }
+      canvas { background: #000; image-rendering: pixelated; border: 1px solid #333; }
+      #hud { white-space: pre; line-height: 1.5; }
+      h1 { font-size: 16px; margin: 8px 16px; color: #6cf; }
+      b { color: #fd6; }
+    </style>
+  </head>
+  <body>
+    <h1>eth-doom — Wolfenstein world simulation running on the EVM (anvil)</h1>
+    <div class="wrap">
+      <canvas id="view" width="448" height="448"></canvas>
+      <div id="hud">booting…</div>
+    </div>
+    <p style="margin:8px 16px;color:#789">
+      WASD to move · the <b style="color:#f55">guard</b> chases and shoots you · every frame is one
+      <code>submitInput</code> tx; the view is decoded from the contract's <code>getState()</code>.
+    </p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
