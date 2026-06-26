@@ -16,9 +16,9 @@
 static void emit(long tick)
 {
     printf("{\"tick\":%ld,\"x\":%ld,\"y\":%ld,\"angle\":%d,"
-           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d,\"health\":%d",
+           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d,\"health\":%d,\"ammo\":%d,\"acount\":%d",
            tick, (long)player->x, (long)player->y, player->angle,
-           player->tilex, player->tiley, anglefrac, health);
+           player->tilex, player->tiley, anglefrac, health, ammo, attackcount);
     if (numenemies > 0) {
         printf(",\"rng\":%d,\"guards\":[", rndindex);
         for (int i = 0; i < numenemies; i++) {
@@ -107,6 +107,7 @@ int main(int argc, char **argv)
         ControlMovement(player);
         plux = player->x >> UNSIGNEDSHIFT;
         pluy = player->y >> UNSIGNEDSHIFT;
+        PlayerAttack(btns);
         for (int e = 0; e < numenemies; e++)
             DoActor(&enemies[e]);
         emit(++tick);

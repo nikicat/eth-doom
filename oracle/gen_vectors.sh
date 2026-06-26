@@ -19,5 +19,9 @@ run move_basic test_room.txt 8 8 1
 "$ORACLE" oracle/maps/test_room.txt vectors/chase_guard.input.txt 8 8 1 12 8 4 \
     > vectors/chase_guard.golden.jsonl
 
+# kill: player at (4,8) faces east and fires; guard at (12,8) approaches and dies
+"$ORACLE" oracle/maps/test_room.txt vectors/kill_guard.input.txt 4 8 1 12 8 4 \
+    > vectors/kill_guard.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl

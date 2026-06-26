@@ -16,6 +16,8 @@ int      plux, pluy;
 long     thrustspeed;
 int      health = 100;   /* gamestate.health */
 int      playerdead;     /* playstate == ex_died */
+int      ammo = STARTAMMO;
+int      attackcount;    /* fire cooldown */
 
 static unsigned char areabyplayer[64];   /* single-area map: all reachable */
 static int doorposition[256];             /* no doors in M2 (kept for CheckLine) */
@@ -52,6 +54,8 @@ const statedef gstates[NUMSTATES] = {
     [S_GRDDIE2]    = { 15, TH_NONE,  AC_NONE,        S_GRDDIE3 },
     [S_GRDDIE3]    = { 15, TH_NONE,  AC_NONE,        S_GRDDIE4 },
     [S_GRDDIE4]    = { 0,  TH_NONE,  AC_NONE,        S_GRDDIE4 },
+    [S_GRDPAIN]    = { 10, TH_NONE,  AC_NONE,        S_GRDCHASE1 },
+    [S_GRDPAIN1]   = { 10, TH_NONE,  AC_NONE,        S_GRDCHASE1 },
 };
 
 static void NewState(objtype *ob, int state) {
@@ -395,6 +399,74 @@ static void T_Shoot(objtype *ob) {
         else if (dist < 4) damage = US_RndT() >> 3;
         else               damage = US_RndT() >> 4;
         TakeDamage(damage, ob);
+    }
+}
+
+/* WL_STATE.C KillActor (guard: die animation, no longer shootable; points/item dropped). */
+static void KillActor(objtype *ob) {
+    ob->tilex = ob->x >> TILESHIFT;
+    ob->tiley = ob->y >> TILESHIFT;
+    NewState(ob, S_GRDDIE1);
+    ob->flags &= ~FL_SHOOTABLE;
+}
+
+/* WL_STATE.C DamageActor (guard is in attack mode here, so no double-damage / FirstSighting). */
+static void DamageActor(objtype *ob, int damage) {
+    if (!(ob->flags & FL_ATTACKMODE))
+        damage <<= 1;
+    ob->hitpoints -= damage;
+    if (ob->hitpoints <= 0) {
+        KillActor(ob);
+        return;
+    }
+    if (ob->hitpoints & 1) NewState(ob, S_GRDPAIN);
+    else                   NewState(ob, S_GRDPAIN1);
+}
+
+/* WL_AGENT.C GunAttack — player hitscan. The original picks the on-screen target via
+ * viewx/FL_VISABLE (render-derived); here the aim is computed from sim state: the
+ * closest shootable actor that is in front (depth nx >= MINDIST via the view rotation)
+ * with a clear line of sight. The screen-pixel `shootdelta` cone is the one part
+ * dropped (it's render-config-specific). Damage/miss math is faithful. */
+static void GunAttack(void) {
+    int   va = player->angle;
+    fixed viewsin = sintable[va], viewcos = costable[va];
+    fixed viewx = player->x - FixedByFrac(FOCALLENGTH, viewcos);
+    fixed viewy = player->y + FixedByFrac(FOCALLENGTH, viewsin);
+    objtype *closest = NULL;
+    long bestnx = 0x7fffffffL;
+
+    for (int i = 0; i < numenemies; i++) {
+        objtype *e = &enemies[i];
+        if (!(e->flags & FL_SHOOTABLE)) continue;
+        fixed gx = e->x - viewx, gy = e->y - viewy;
+        fixed nx = FixedByFrac(gx, viewcos) - FixedByFrac(gy, viewsin) - ACTORSIZE;
+        if (nx < MINDIST) continue;     /* behind / too close */
+        if (!CheckLine(e)) continue;    /* line of sight blocked */
+        if (nx < bestnx) { bestnx = nx; closest = e; }
+    }
+    if (!closest) return;
+
+    int dx = abs((int)closest->tilex - (int)player->tilex);
+    int dy = abs((int)closest->tiley - (int)player->tiley);
+    int dist = dx > dy ? dx : dy;
+    int damage;
+    if (dist < 2)      damage = US_RndT() / 4;
+    else if (dist < 4) damage = US_RndT() / 6;
+    else {
+        if (US_RndT() / 12 < dist) return; /* missed */
+        damage = US_RndT() / 6;
+    }
+    DamageActor(closest, damage);
+}
+
+/* Player firing: a simple cooldown replaces the weapon animation (Cmd_Fire/T_Attack). */
+void PlayerAttack(int buttons) {
+    if (attackcount > 0) attackcount--;
+    if ((buttons & 1) && attackcount == 0 && ammo > 0) { /* bt_attack = bit 0 */
+        ammo--;
+        GunAttack();
+        attackcount = ATTACKRATE;
     }
 }
 

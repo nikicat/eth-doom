@@ -43,7 +43,7 @@ fn s16(w: U256, shift: usize) -> i64 {
 
 /// One golden snapshot line.
 struct Snap {
-    player: [i64; 7], // x,y,angle,tilex,tiley,anglefrac,health
+    player: [i64; 9], // x,y,angle,tilex,tiley,anglefrac,health,ammo,acount
     rng: Option<i64>,
     guards: Vec<[i64; 7]>, // x,y,dir,st,hp,tc,dist
 }
@@ -62,7 +62,7 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
             }
         }
         out.push(Snap {
-            player: [g("x")?, g("y")?, g("angle")?, g("tilex")?, g("tiley")?, g("anglefrac")?, g("health")?],
+            player: [g("x")?, g("y")?, g("angle")?, g("tilex")?, g("tiley")?, g("anglefrac")?, g("health")?, g("ammo")?, g("acount")?],
             rng: v.get("rng").and_then(|x| x.as_i64()),
             guards,
         });
@@ -122,6 +122,8 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
         field(pw, 120, 8) as i64, // tiley
         s32(pw, 80),              // anglefrac
         s16(pw, 128),             // health
+        s16(pw, 144),             // ammo
+        s16(pw, 160),             // attackcount
     ];
     if player != want.player {
         bail!("tic {tick} PLAYER mismatch\n  got  {:?}\n  want {:?}", player, want.player);
@@ -164,6 +166,8 @@ async fn main() -> Result<()> {
          "vectors/move_basic.golden.jsonl", (8, 8, 1), vec![]),
         ("chase_guard", "oracle/maps/test_room.txt", "vectors/chase_guard.input.txt",
          "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 4]),
+        ("kill_guard", "oracle/maps/test_room.txt", "vectors/kill_guard.input.txt",
+         "vectors/kill_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 4]),
     ];
 
     for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {

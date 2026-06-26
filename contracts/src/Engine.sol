@@ -25,6 +25,10 @@ contract Engine {
     int256 internal constant ANGLESCALE = 20;
     int256 internal constant SPDPATROL = 512;
     int256 internal constant RUNSPEED = 6000;
+    int256 internal constant FOCALLENGTH = 0x5700;
+    int256 internal constant ACTORSIZE = 0x4000;
+    int256 internal constant ATTACKRATE = 14;
+    int256 internal constant STARTAMMO = 8;
     int256 internal constant TICS = 1;
     uint8 internal constant BT_STRAFE = 0x02;
 
@@ -49,6 +53,9 @@ contract Engine {
     uint256 internal constant S_GRDSTAND = 0;
     uint256 internal constant S_GRDCHASE1 = 1;
     uint256 internal constant S_GRDSHOOT1 = 7;
+    uint256 internal constant S_GRDDIE1 = 10;
+    uint256 internal constant S_GRDPAIN = 14;
+    uint256 internal constant S_GRDPAIN1 = 15;
 
     // direction tables (WL_STATE.C). OPPOSITE[9]; DIAGONAL[9][9] row-major.
     bytes internal constant OPPOSITE = hex"040506070001020308";
@@ -65,6 +72,8 @@ contract Engine {
         uint256 tiley;
         int256 anglefrac;
         int256 health;
+        int256 ammo;
+        int256 attackcount;
     }
 
     struct Actor {
@@ -116,6 +125,7 @@ contract Engine {
         wd.p.tilex = uint256(wd.p.x >> 16);
         wd.p.tiley = uint256(wd.p.y >> 16);
         wd.p.health = 100;
+        wd.p.ammo = STARTAMMO;
 
         bytes memory guards = IMap(map).guards(); // 3 bytes each: tilex,tiley,dir
         uint256 n = guards.length / 3;
@@ -137,6 +147,7 @@ contract Engine {
         _controlMovement(wd, cmd);
         wd.plux = wd.p.x >> 8; // UNSIGNEDSHIFT
         wd.pluy = wd.p.y >> 8;
+        _playerAttack(wd, cmd);
         for (uint256 i = 0; i < wd.actors.length; i++) {
             _doActor(wd, wd.actors[i]);
         }
@@ -560,6 +571,77 @@ contract Engine {
         if (wd.p.health <= 0) wd.p.health = 0;
     }
 
+    /// Player firing: a cooldown replaces the weapon animation (Cmd_Fire/T_Attack).
+    function _playerAttack(World memory wd, Cmd calldata cmd) internal pure {
+        if (wd.p.attackcount > 0) wd.p.attackcount -= 1;
+        if ((cmd.buttons & 1) != 0 && wd.p.attackcount == 0 && wd.p.ammo > 0) {
+            wd.p.ammo -= 1;
+            _gunAttack(wd);
+            wd.p.attackcount = ATTACKRATE;
+        }
+    }
+
+    /// WL_AGENT.C GunAttack. Original targets via render-derived viewx/FL_VISABLE;
+    /// here the aim is computed from sim state — closest shootable actor in front
+    /// (depth nx >= MINDIST via the view rotation) with clear LOS. Damage/miss
+    /// math is faithful; the screen-pixel `shootdelta` cone is dropped (render-specific).
+    function _gunAttack(World memory wd) internal pure {
+        uint256 va = uint256(wd.p.angle);
+        uint32 viewcosR = Trig.cosAt(wd.trig, va);
+        uint32 viewsinR = Trig.sinAt(wd.trig, va);
+        int256 viewx = wd.p.x - Fixed.fixedByFrac(FOCALLENGTH, viewcosR);
+        int256 viewy = wd.p.y + Fixed.fixedByFrac(FOCALLENGTH, viewsinR);
+
+        int256 bestnx = type(int256).max;
+        int256 closest = -1;
+        for (uint256 i = 0; i < wd.actors.length; i++) {
+            Actor memory e = wd.actors[i];
+            if ((e.flags & FL_SHOOTABLE) == 0) continue;
+            int256 nx = Fixed.fixedByFrac(e.x - viewx, viewcosR)
+                - Fixed.fixedByFrac(e.y - viewy, viewsinR) - ACTORSIZE;
+            if (nx < MINDIST) continue;
+            if (!_checkLine(wd, e)) continue;
+            if (nx < bestnx) {
+                bestnx = nx;
+                closest = int256(i);
+            }
+        }
+        if (closest < 0) return;
+
+        Actor memory c = wd.actors[uint256(closest)];
+        int256 dx = _abs(int256(c.tilex) - int256(wd.p.tilex));
+        int256 dy = _abs(int256(c.tiley) - int256(wd.p.tiley));
+        int256 dist = dx > dy ? dx : dy;
+        int256 damage;
+        if (dist < 2) damage = int256(_rnd(wd)) / 4;
+        else if (dist < 4) damage = int256(_rnd(wd)) / 6;
+        else {
+            if (int256(_rnd(wd)) / 12 < dist) return; // missed
+            damage = int256(_rnd(wd)) / 6;
+        }
+        _damageActor(c, damage);
+    }
+
+    /// WL_STATE.C DamageActor (guard is in attack mode here: no double-damage / FirstSighting).
+    function _damageActor(Actor memory a, int256 damage) internal pure {
+        if ((a.flags & FL_ATTACKMODE) == 0) damage = damage * 2;
+        a.hitpoints -= damage;
+        if (a.hitpoints <= 0) {
+            _killActor(a);
+            return;
+        }
+        if ((a.hitpoints & 1) == 1) _newState(a, S_GRDPAIN);
+        else _newState(a, S_GRDPAIN1);
+    }
+
+    /// WL_STATE.C KillActor (guard: die animation, no longer shootable).
+    function _killActor(Actor memory a) internal pure {
+        a.tilex = uint256(a.x >> 16);
+        a.tiley = uint256(a.y >> 16);
+        _newState(a, S_GRDDIE1);
+        a.flags &= ~FL_SHOOTABLE;
+    }
+
     /// WL_PLAY.C DoActor — state-machine advance (no actorat marking; single guard).
     function _doActor(World memory wd, Actor memory a) internal pure {
         (uint256 tictime, uint256 think, uint256 action, uint256 nxt) = _gstate(a.state);
@@ -619,7 +701,9 @@ contract Engine {
         if (s == 10) return (15, 0, 2, 11); // die1 (AC_DEATHSCREAM)
         if (s == 11) return (15, 0, 0, 12); // die2
         if (s == 12) return (15, 0, 0, 13); // die3
-        return (0, 0, 0, 13); // die4
+        if (s == 13) return (0, 0, 0, 13); // die4 (corpse)
+        if (s == 14) return (10, 0, 0, 1); // pain  -> chase1
+        return (10, 0, 0, 1); // pain1 (s==15) -> chase1
     }
 
     // ---------------- helpers ----------------
@@ -706,6 +790,8 @@ contract Engine {
         w |= uint256(uint8(p.tilex)) << 112;
         w |= uint256(uint8(p.tiley)) << 120;
         w |= uint256(uint16(int16(p.health))) << 128;
+        w |= uint256(uint16(int16(p.ammo))) << 144;
+        w |= uint256(uint16(int16(p.attackcount))) << 160;
     }
 
     function _unpackPlayer(uint256 w) internal pure returns (Player memory p) {
@@ -716,6 +802,8 @@ contract Engine {
         p.tilex = uint256(uint8(w >> 112));
         p.tiley = uint256(uint8(w >> 120));
         p.health = int256(int16(uint16(w >> 128)));
+        p.ammo = int256(int16(uint16(w >> 144)));
+        p.attackcount = int256(int16(uint16(w >> 160)));
     }
 
     function _packActor(Actor memory a) internal pure returns (uint256 w) {

@@ -42,6 +42,10 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define SPDPATROL     512L        /* guard patrol speed; chase = *3 */
 #define MINSIGHT      0x18000L
 #define RUNSPEED      6000        /* player thrustspeed for "running" (T_Shoot) */
+#define FOCALLENGTH   0x5700L     /* view focal point offset (WL_MAIN.C) */
+#define ACTORSIZE     0x4000L     /* TransformActor shape fudge (WL_DRAW.C) */
+#define ATTACKRATE    14          /* PoC fire cooldown (replaces the weapon anim) */
+#define STARTAMMO     8
 /* actor flags */
 #define FL_SHOOTABLE   1
 #define FL_NEVERMARK   4
@@ -68,6 +72,7 @@ enum {
     S_GRDCHASE1, S_GRDCHASE1S, S_GRDCHASE2, S_GRDCHASE3, S_GRDCHASE3S, S_GRDCHASE4,
     S_GRDSHOOT1, S_GRDSHOOT2, S_GRDSHOOT3,
     S_GRDDIE1, S_GRDDIE2, S_GRDDIE3, S_GRDDIE4,
+    S_GRDPAIN, S_GRDPAIN1,
     NUMSTATES
 };
 
@@ -102,6 +107,7 @@ extern int   anglefrac;                 /* persistent sub-degree turn accumulato
 extern long  playerxmove, playerymove;
 extern long  thrustspeed;               /* total player thrust this tic (T_Shoot) */
 extern int   health, playerdead;        /* gamestate.health; ex_died flag */
+extern int   ammo, attackcount;         /* gamestate.ammo; fire cooldown */
 
 extern objtype  playerent;
 extern objtype *player;
@@ -129,6 +135,7 @@ extern const statedef gstates[NUMSTATES];
 void InitActors(void);                     /* clear lists, seed actorat from walls */
 void SpawnGuard(int tilex, int tiley, int dir);
 void DoActor(objtype *ob);                 /* WL_PLAY.C state-machine advance */
+void PlayerAttack(int buttons);            /* fire cooldown + GunAttack hitscan */
 
 /* --- API --- */
 void  BuildTables(void);                 /* WL_MAIN.C */

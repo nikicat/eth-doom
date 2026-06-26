@@ -1,0 +1,160 @@
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
+# player holds fire (bt_attack=1), faces the guard
+0 0 1
