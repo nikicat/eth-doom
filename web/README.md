@@ -38,14 +38,24 @@ smoothly between ticks (independent of tx latency).
 ## Authentic Wolfenstein art (optional)
 
 The client renders procedural placeholder art by default. To get the **real** Wolf3D walls and
-guard sprites, point `rust/wl-extract` at a Wolfenstein 3D **shareware** `VSWAP.WL1` you provide:
+guard sprites, one helper does the whole thing — download the freely-distributable **shareware**,
+find its `VSWAP.WL1`, and extract:
 
 ```
-# get the freely-distributable WL1 shareware (e.g. from archive.org / 3D Realms) and
-# copy its VSWAP.WL1 somewhere, then:
-cargo run -p wl-extract -- --vswap /path/to/VSWAP.WL1 --out web/public/wolf
+scripts/fetch-shareware.sh         # download shareware + extract → web/public/wolf
 # reload the page — the HUD shows  art: real id (VSWAP)
 ```
+
+Already have a shareware archive (or your own registered copy)? Skip the download:
+
+```
+scripts/fetch-shareware.sh --zip /path/to/1wolf14.zip   # or any zip containing VSWAP.WL1
+cargo run -p wl-extract -- --vswap /path/to/VSWAP.WL1 --out web/public/wolf   # or call the extractor directly
+```
+
+> The script only ever auto-downloads the **shareware** (episode 1, `.WL1`). The registered game's
+> `.WL6` data is commercial and not redistributable — if you own it, pass it via `--zip` (the
+> extractor reads `VSWAP.WL6` identically), but the script won't fetch it.
 
 `wl-extract` decodes VSWAP's 64×64 column-major wall textures and its compshape (RLE) sprite frames
 to PNGs under `web/public/wolf/` (which the client lazy-loads at runtime). **No id Software art is
