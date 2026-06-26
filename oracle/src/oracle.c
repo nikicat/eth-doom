@@ -54,6 +54,16 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    /* validate the RNG: print the first N values from a deterministic start */
+    if (argc == 3 && strcmp(argv[1], "--dump-rng") == 0) {
+        US_InitRndT(0);
+        int n = atoi(argv[2]);
+        for (int i = 0; i < n; i++)
+            printf("%d ", US_RndT());
+        printf("\n");
+        return 0;
+    }
+
     if (argc != 6) {
         fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir>\n", argv[0]);
         return 1;

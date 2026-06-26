@@ -50,7 +50,7 @@ contract Engine {
 
     /// @notice Initial state for a map (WL_AGENT.C SpawnPlayer; Thrust(0,0) just
     /// fixes tilex/tiley here).
-    function spawn(address map) external view returns (bytes memory) {
+    function spawn(address map) external view returns (bytes32) {
         (uint256 tx, uint256 ty, uint256 dir) = IMap(map).spawn();
         St memory st;
         st.x = (int256(tx) << 16) + TILEGLOBAL / 2;
@@ -59,17 +59,17 @@ contract Engine {
         if (st.angle < 0) st.angle += ANGLES;
         st.tilex = uint256(st.x >> 16);
         st.tiley = uint256(st.y >> 16);
-        return _encode(st);
+        return _pack(st);
     }
 
     /// @notice Advance the world exactly one tic. Stateless: pure function of
-    /// (state, map, cmd). Returns the new encoded state.
-    function tick(bytes calldata state, address map, Cmd calldata cmd)
+    /// (state, map, cmd). The whole player snapshot packs into one 256-bit word.
+    function tick(bytes32 state, address map, Cmd calldata cmd)
         external
         view
-        returns (bytes memory)
+        returns (bytes32)
     {
-        St memory st = _decode(state);
+        St memory st = _unpack(state);
         Ctx memory ctx = Ctx({
             tiles: IMap(map).tiles(),
             w: IMap(map).width(),
@@ -77,7 +77,7 @@ contract Engine {
             trig: Trig.table()
         });
         _controlMovement(st, cmd, ctx);
-        return _encode(st);
+        return _pack(st);
     }
 
     // ---- movement (WL_AGENT.C) ----
@@ -173,14 +173,27 @@ contract Engine {
         }
     }
 
-    // ---- state codec ----
+    // ---- state codec: pack the snapshot into one 256-bit word ----
+    // layout (LSB first): x:int32 | y:int32 | angle:uint16 | anglefrac:int32 |
+    //                     tilex:uint8 | tiley:uint8   (128 bits used)
 
-    function _encode(St memory st) internal pure returns (bytes memory) {
-        return abi.encode(st.x, st.y, st.angle, st.tilex, st.tiley, st.anglefrac);
+    function _pack(St memory s) internal pure returns (bytes32) {
+        uint256 w = uint256(uint32(int32(s.x)));
+        w |= uint256(uint32(int32(s.y))) << 32;
+        w |= uint256(uint16(int16(s.angle))) << 64;
+        w |= uint256(uint32(int32(s.anglefrac))) << 80;
+        w |= uint256(uint8(s.tilex)) << 112;
+        w |= uint256(uint8(s.tiley)) << 120;
+        return bytes32(w);
     }
 
-    function _decode(bytes calldata state) internal pure returns (St memory st) {
-        (st.x, st.y, st.angle, st.tilex, st.tiley, st.anglefrac) =
-            abi.decode(state, (int256, int256, int256, uint256, uint256, int256));
+    function _unpack(bytes32 b) internal pure returns (St memory s) {
+        uint256 w = uint256(b);
+        s.x = int256(int32(uint32(w)));
+        s.y = int256(int32(uint32(w >> 32)));
+        s.angle = int256(int16(uint16(w >> 64)));
+        s.anglefrac = int256(int32(uint32(w >> 80)));
+        s.tilex = uint256(uint8(w >> 112));
+        s.tiley = uint256(uint8(w >> 120));
     }
 }

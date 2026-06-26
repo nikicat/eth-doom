@@ -10,10 +10,10 @@ contract Session {
     Engine public immutable engine;
     address public immutable map;
 
-    bytes public state;
+    bytes32 public state;
     uint256 public tickCount;
 
-    event StateDelta(uint256 indexed tick, bytes state);
+    event StateDelta(uint256 indexed tick, bytes32 state);
 
     constructor(address _engine, address _map) {
         engine = Engine(_engine);
@@ -24,12 +24,12 @@ contract Session {
 
     /// @notice Advance the world one tic with this input (1 input = 1 tick).
     function submitInput(Engine.Cmd calldata cmd) external {
-        bytes memory ns = engine.tick(state, map, cmd);
+        bytes32 ns = engine.tick(state, map, cmd);
         state = ns;
         emit StateDelta(++tickCount, ns);
     }
 
-    function getState() external view returns (bytes memory) {
+    function getState() external view returns (bytes32) {
         return state;
     }
 }

@@ -7,9 +7,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use alloy::primitives::{Bytes, I256, U256};
+use alloy::primitives::{Bytes, B256, I256, U256};
 use alloy::providers::ProviderBuilder;
-use alloy::sol_types::SolValue;
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
@@ -96,18 +95,21 @@ fn load_inputs(path: &str) -> Result<Vec<(i64, i64, u8)>> {
     Ok(out)
 }
 
-/// Decode abi.encode(int x,int y,int angle,uint tilex,uint tiley,int anglefrac).
-fn decode_state(bytes: &[u8]) -> Result<(i64, i64, i64, i64, i64, i64)> {
-    let (x, y, angle, tilex, tiley, anglefrac) =
-        <(I256, I256, I256, U256, U256, I256)>::abi_decode(bytes)?;
-    Ok((
-        i128::try_from(x)? as i64,
-        i128::try_from(y)? as i64,
-        i128::try_from(angle)? as i64,
-        tilex.to::<u64>() as i64,
-        tiley.to::<u64>() as i64,
-        i128::try_from(anglefrac)? as i64,
-    ))
+/// Unpack the engine's single-word state. Layout (LSB first): x:int32 | y:int32 |
+/// angle:uint16 | anglefrac:int32 | tilex:uint8 | tiley:uint8.
+fn decode_state(word: B256) -> (i64, i64, i64, i64, i64, i64) {
+    let u = U256::from_be_bytes(word.0);
+    let field = |shift: usize, bits: usize| -> u64 {
+        let mask = (U256::from(1u64) << bits) - U256::from(1u64);
+        ((u >> shift) & mask).to::<u64>()
+    };
+    let x = field(0, 32) as u32 as i32 as i64;
+    let y = field(32, 32) as u32 as i32 as i64;
+    let angle = field(64, 16) as i64;
+    let anglefrac = field(80, 32) as u32 as i32 as i64;
+    let tilex = field(112, 8) as i64;
+    let tiley = field(120, 8) as i64;
+    (x, y, angle, tilex, tiley, anglefrac)
 }
 
 fn check(tick: i64, got: (i64, i64, i64, i64, i64, i64), want: &Snap) -> Result<()> {
@@ -145,8 +147,8 @@ async fn main() -> Result<()> {
 
     // tic 0: post-spawn state set in the Session constructor.
     let state0 = session.getState().call().await?;
-    check(0, decode_state(state0.as_ref())?, &golden[0])?;
-    println!("tic   0  ok  {:?}", decode_state(state0.as_ref())?);
+    check(0, decode_state(state0), &golden[0])?;
+    println!("tic   0  ok  {:?}", decode_state(state0));
 
     let mut gas_used = Vec::new();
     for (i, &(cx, cy, btns)) in inputs.iter().enumerate() {
@@ -160,7 +162,7 @@ async fn main() -> Result<()> {
         gas_used.push(receipt.gas_used);
 
         let state = session.getState().call().await?;
-        let got = decode_state(state.as_ref())?;
+        let got = decode_state(state);
         check(tick, got, &golden[tick as usize])?;
         println!("tic {:>3}  ok  gas {:>7}  {:?}", tick, receipt.gas_used, got);
     }

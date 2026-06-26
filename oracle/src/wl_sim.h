@@ -62,6 +62,11 @@ extern unsigned char tilemap[MAPSIZE][MAPSIZE];
 extern int controlx, controly;          /* per-tic input (already device-scaled) */
 extern int buttonstate[NUMBUTTONS];
 
+/* --- deterministic RNG (ID_US_A.ASM) --- */
+extern int rndindex;
+void US_InitRndT(int randomize);
+int  US_RndT(void);
+
 /* --- API --- */
 void  BuildTables(void);                 /* WL_MAIN.C */
 fixed FixedByFrac(fixed a, fixed b);     /* WL_DRAW.C asm, portable */
