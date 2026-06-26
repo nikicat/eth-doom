@@ -4,16 +4,23 @@ Wolfenstein-3D **world simulation** running as an EVM smart contract — the cha
 authoritative, deterministic multiplayer consensus engine (the same shape as Wolf3D's original
 lockstep netcode). Rendering and audio stay off-chain.
 
-See the design plan: `~/.claude-personal/plans/megaeth-looks-promising-but-hazy-crane.md`.
+**Working today:** a guard chases you, shoots you, and you can shoot it dead — a full PvE loop
+simulated entirely in a Solidity contract, **verified bit-for-bit against the original id C code**,
+at ~80–126k gas per input, with a live top-down browser view.
+
+- **[docs/STATUS.md](docs/STATUS.md)** — milestones, what runs, gas numbers, how to run it.
+- **[docs/DESIGN.md](docs/DESIGN.md)** — architecture, the differential-testing method, state
+  layout, and the sim↔render faithfulness adaptations.
 
 ## Layout
 
 ```
-reference/   cloned wolf3d + sage-raycaster (read-only reference)
-oracle/      carved C sim → headless `sim_oracle` (ground truth for differential tests)
-contracts/   Foundry: Engine / Map / Session / SessionFactory (Solidity)
-rust/        cargo workspace: map-extract · harness (revm gate) · client-core (→ wasm)
-web/         TypeScript + Vite shell (wallet connect, mounts wasm modules)
+docs/        STATUS.md · DESIGN.md
+reference/   cloned wolf3d + sage-raycaster (read-only; not committed — see below)
+oracle/      carved C sim → headless sim_oracle (differential ground truth)
+contracts/   Foundry: Engine / Map / Session + Fixed/Trig/Rng libs (Solidity)
+rust/        cargo workspace: harness (differential + gas) · map-extract · client-core (stubs)
+web/         TypeScript + Vite + viem top-down client
 vectors/     golden input + per-tick snapshot files (committed)
 ```
 
