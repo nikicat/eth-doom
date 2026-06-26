@@ -8,4 +8,6 @@ interface IMap {
     function height() external view returns (uint256);
     function tiles() external view returns (bytes memory);
     function spawn() external view returns (uint256 x, uint256 y, uint256 dir);
+    /// @notice Guard spawns, 3 bytes each: tilex, tiley, dir.
+    function guards() external view returns (bytes memory);
 }

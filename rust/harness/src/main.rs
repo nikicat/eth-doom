@@ -1,4 +1,4 @@
-//! M1 differential + gas harness.
+//! M1/M2 differential + gas harness.
 //!
 //! Deploys Map/Engine/Session on an in-process anvil, replays a recorded input
 //! vector through `Session.submitInput`, and asserts the resulting state matches
@@ -7,13 +7,12 @@
 use std::fs;
 use std::path::PathBuf;
 
-use alloy::primitives::{Bytes, B256, I256, U256};
+use alloy::dyn_abi::{DynSolType, DynSolValue};
+use alloy::primitives::{Bytes, I256, U256};
 use alloy::providers::ProviderBuilder;
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
-// Isolate each binding: Session's ABI re-declares Engine/Cmd, which collides at
-// crate root, so give each its own module.
 mod eng {
     alloy::sol!(#[sol(rpc)] Engine, "../../contracts/out/Engine.sol/Engine.json");
 }
@@ -28,15 +27,40 @@ fn repo(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(path)
 }
 
+/// DynSolType for the engine's `abi.encode(Player, Actor[], rndindex)`.
+fn world_type() -> DynSolType {
+    let player = DynSolType::Tuple(vec![
+        DynSolType::Int(256), DynSolType::Int(256), DynSolType::Int(256),
+        DynSolType::Uint(256), DynSolType::Uint(256), DynSolType::Int(256),
+    ]);
+    let actor = DynSolType::Tuple(vec![
+        DynSolType::Int(256), DynSolType::Int(256), DynSolType::Uint(256), DynSolType::Uint(256),
+        DynSolType::Int(256), DynSolType::Uint(256), DynSolType::Int(256), DynSolType::Int(256),
+        DynSolType::Int(256), DynSolType::Uint(8), DynSolType::Uint(8), DynSolType::Int(256),
+        DynSolType::Uint(8),
+    ]);
+    DynSolType::Tuple(vec![player, DynSolType::Array(Box::new(actor)), DynSolType::Uint(256)])
+}
+
+fn as_i(v: &DynSolValue) -> i64 {
+    match v {
+        DynSolValue::Int(x, _) => i128::try_from(*x).unwrap() as i64,
+        DynSolValue::Uint(x, _) => x.to::<u64>() as i64,
+        _ => panic!("not a number: {v:?}"),
+    }
+}
+fn tup(v: &DynSolValue) -> &Vec<DynSolValue> {
+    match v { DynSolValue::Tuple(t) => t, _ => panic!("not a tuple") }
+}
+fn arr(v: &DynSolValue) -> &Vec<DynSolValue> {
+    match v { DynSolValue::Array(t) => t, _ => panic!("not an array") }
+}
+
 /// One golden snapshot line.
-#[derive(Debug)]
 struct Snap {
-    x: i64,
-    y: i64,
-    angle: i64,
-    tilex: i64,
-    tiley: i64,
-    anglefrac: i64,
+    player: [i64; 6], // x,y,angle,tilex,tiley,anglefrac
+    rng: Option<i64>,
+    guards: Vec<[i64; 7]>, // x,y,dir,st,hp,tc,dist
 }
 
 fn load_golden(path: &str) -> Result<Vec<Snap>> {
@@ -45,13 +69,17 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
     for line in txt.lines().filter(|l| !l.trim().is_empty()) {
         let v: Value = serde_json::from_str(line)?;
         let g = |k: &str| v[k].as_i64().ok_or_else(|| anyhow!("missing {k}"));
+        let mut guards = Vec::new();
+        if let Some(arr) = v.get("guards").and_then(|x| x.as_array()) {
+            for gd in arr {
+                let f = |k: &str| gd[k].as_i64().unwrap();
+                guards.push([f("x"), f("y"), f("dir"), f("st"), f("hp"), f("tc"), f("dist")]);
+            }
+        }
         out.push(Snap {
-            x: g("x")?,
-            y: g("y")?,
-            angle: g("angle")?,
-            tilex: g("tilex")?,
-            tiley: g("tiley")?,
-            anglefrac: g("anglefrac")?,
+            player: [g("x")?, g("y")?, g("angle")?, g("tilex")?, g("tiley")?, g("anglefrac")?],
+            rng: v.get("rng").and_then(|x| x.as_i64()),
+            guards,
         });
     }
     Ok(out)
@@ -95,88 +123,81 @@ fn load_inputs(path: &str) -> Result<Vec<(i64, i64, u8)>> {
     Ok(out)
 }
 
-/// Unpack the engine's single-word state. Layout (LSB first): x:int32 | y:int32 |
-/// angle:uint16 | anglefrac:int32 | tilex:uint8 | tiley:uint8.
-fn decode_state(word: B256) -> (i64, i64, i64, i64, i64, i64) {
-    let u = U256::from_be_bytes(word.0);
-    let field = |shift: usize, bits: usize| -> u64 {
-        let mask = (U256::from(1u64) << bits) - U256::from(1u64);
-        ((u >> shift) & mask).to::<u64>()
-    };
-    let x = field(0, 32) as u32 as i32 as i64;
-    let y = field(32, 32) as u32 as i32 as i64;
-    let angle = field(64, 16) as i64;
-    let anglefrac = field(80, 32) as u32 as i32 as i64;
-    let tilex = field(112, 8) as i64;
-    let tiley = field(120, 8) as i64;
-    (x, y, angle, tilex, tiley, anglefrac)
-}
-
-fn check(tick: i64, got: (i64, i64, i64, i64, i64, i64), want: &Snap) -> Result<()> {
-    let exp = (want.x, want.y, want.angle, want.tilex, want.tiley, want.anglefrac);
-    if got != exp {
-        bail!("tic {tick} MISMATCH\n  got  {:?}\n  want {:?}", got, exp);
+fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
+    let decoded = world_type().abi_decode_params(state)?;
+    let top = tup(&decoded);
+    let p = tup(&top[0]);
+    let pl = [as_i(&p[0]), as_i(&p[1]), as_i(&p[2]), as_i(&p[3]), as_i(&p[4]), as_i(&p[5])];
+    if pl != want.player {
+        bail!("tic {tick} PLAYER mismatch\n  got  {:?}\n  want {:?}", pl, want.player);
+    }
+    let actors = arr(&top[1]);
+    let rnd = as_i(&top[2]);
+    if let Some(wr) = want.rng {
+        if rnd != wr {
+            bail!("tic {tick} RNG mismatch: got {} want {}", rnd, wr);
+        }
+    }
+    if actors.len() != want.guards.len() {
+        bail!("tic {tick} guard count: got {} want {}", actors.len(), want.guards.len());
+    }
+    for (k, av) in actors.iter().enumerate() {
+        let a = tup(av);
+        // golden guard order: x, y, dir, state, hp, ticcount, distance
+        let got = [as_i(&a[0]), as_i(&a[1]), as_i(&a[4]), as_i(&a[5]), as_i(&a[8]), as_i(&a[6]), as_i(&a[7])];
+        if got != want.guards[k] {
+            bail!("tic {tick} GUARD{k} mismatch\n  got  {:?}\n  want {:?}", got, want.guards[k]);
+        }
     }
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (w, h, tiles) = load_map("oracle/maps/test_room.txt")?;
-    let inputs = load_inputs("vectors/move_basic.input.txt")?;
-    let golden = load_golden("vectors/move_basic.golden.jsonl")?;
-    let (sx, sy, sdir) = (8u64, 8u64, 1u64); // matches gen_vectors.sh
-
     let provider = ProviderBuilder::new().connect_anvil_with_wallet();
-
     let engine = eng::Engine::deploy(provider.clone()).await?;
-    let map = mp::Map::deploy(
-        provider.clone(),
-        U256::from(w),
-        U256::from(h),
-        Bytes::from(tiles),
-        U256::from(sx),
-        U256::from(sy),
-        U256::from(sdir),
-    )
-    .await?;
-    let session =
-        sess::Session::deploy(provider.clone(), *engine.address(), *map.address()).await?;
 
-    println!("engine={} map={} session={}", engine.address(), map.address(), session.address());
+    // (name, map, input, golden, spawn, guards bytes)
+    let scenarios: &[(&str, &str, &str, &str, (u64, u64, u64), Vec<u8>)] = &[
+        ("move_basic", "oracle/maps/test_room.txt", "vectors/move_basic.input.txt",
+         "vectors/move_basic.golden.jsonl", (8, 8, 1), vec![]),
+        ("chase_guard", "oracle/maps/test_room.txt", "vectors/chase_guard.input.txt",
+         "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 4]),
+    ];
 
-    // tic 0: post-spawn state set in the Session constructor.
-    let state0 = session.getState().call().await?;
-    check(0, decode_state(state0), &golden[0])?;
-    println!("tic   0  ok  {:?}", decode_state(state0));
+    for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {
+        let (w, h, tiles) = load_map(mapf)?;
+        let inputs = load_inputs(inf)?;
+        let golden = load_golden(goldf)?;
 
-    let mut gas_used = Vec::new();
-    for (i, &(cx, cy, btns)) in inputs.iter().enumerate() {
-        let tick = (i + 1) as i64;
-        let cmd = sess::Engine::Cmd {
-            controlx: I256::try_from(cx).unwrap(),
-            controly: I256::try_from(cy).unwrap(),
-            buttons: btns,
-        };
-        let receipt = session.submitInput(cmd).send().await?.get_receipt().await?;
-        gas_used.push(receipt.gas_used);
+        let map = mp::Map::deploy(
+            provider.clone(),
+            U256::from(w), U256::from(h), Bytes::from(tiles),
+            U256::from(*sx), U256::from(*sy), U256::from(*sdir),
+            Bytes::from(guards.clone()),
+        ).await?;
+        let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address()).await?;
 
-        let state = session.getState().call().await?;
-        let got = decode_state(state);
-        check(tick, got, &golden[tick as usize])?;
-        println!("tic {:>3}  ok  gas {:>7}  {:?}", tick, receipt.gas_used, got);
+        decode_and_check(&session.getState().call().await?, &golden[0], 0)?;
+
+        let mut gas = Vec::new();
+        for (idx, &(cx, cy, btns)) in inputs.iter().enumerate() {
+            let cmd = sess::Engine::Cmd {
+                controlx: I256::try_from(cx).unwrap(),
+                controly: I256::try_from(cy).unwrap(),
+                buttons: btns,
+            };
+            let receipt = session.submitInput(cmd).send().await?.get_receipt().await?;
+            gas.push(receipt.gas_used);
+            decode_and_check(&session.getState().call().await?, &golden[idx + 1], (idx + 1) as i64)?;
+        }
+
+        let n = gas.len() as u64;
+        let (sum, min, max) = (gas.iter().sum::<u64>(), *gas.iter().min().unwrap(), *gas.iter().max().unwrap());
+        println!(
+            "{:<12} PASS ({} tics) — submitInput gas: min {} avg {} max {}",
+            name, golden.len(), min, sum / n, max
+        );
     }
-
-    let n = gas_used.len() as u64;
-    let sum: u64 = gas_used.iter().sum();
-    let min = *gas_used.iter().min().unwrap();
-    let max = *gas_used.iter().max().unwrap();
-    println!(
-        "\nDIFFERENTIAL PASS ({} tics) — submitInput gas: min {} avg {} max {}",
-        n + 1,
-        min,
-        sum / n,
-        max
-    );
     Ok(())
 }
