@@ -45,6 +45,15 @@ int main(int argc, char **argv)
     char  line[256];
     long  tick = 0;
 
+    /* dump the sin/cos table (450 big-endian uint32) for baking into Trig.sol */
+    if (argc == 2 && strcmp(argv[1], "--dump-trig") == 0) {
+        BuildTables();
+        for (int i = 0; i < 450; i++)
+            printf("%08x", (uint32_t)sintable[i]);
+        printf("\n");
+        return 0;
+    }
+
     if (argc != 6) {
         fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir>\n", argv[0]);
         return 1;

@@ -1,6 +1,10 @@
 [package]
 name = "harness"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+alloy = { version = "1", features = ["full", "node-bindings"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde_json.workspace = true
+anyhow.workspace = true
