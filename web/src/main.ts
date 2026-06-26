@@ -177,12 +177,17 @@ const normDeg = (a: number) => ((((a + 180) % 360) + 360) % 360) - 180;
 
 const zbuf = new Float64Array(VW); // perpendicular wall distance per column (sage units)
 
-/** Cast one ray from (px,py) at world angle `ra` (deg). Returns nearest wall hit. */
-function castRay(px: number, py: number, ra: number): { dist: number; vertical: boolean } {
+/**
+ * Cast one ray from (px,py) at world angle `ra` (deg). Returns the nearest wall hit:
+ * its distance, whether it's a vertical (E/W-facing) grid line, and the texture
+ * column 0..63 where the ray struck the wall (for texture mapping).
+ */
+function castRay(px: number, py: number, ra: number): { dist: number; vertical: boolean; tex: number } {
   ra = fixAng(ra);
   const cs = Math.cos(ra * DR), sn = Math.sin(ra * DR);
   let rx: number, ry: number, xo: number, yo: number, dof: number;
   let disV = 1e9, disH = 1e9;
+  let vy = py, hx = px; // wall-hit coords used for the texture column
 
   // --- vertical grid lines (x = k*U) ---
   let Tan = Math.tan(ra * DR);
@@ -192,7 +197,7 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
   while (dof < 8) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
-    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); }
+    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; }
     else { rx += xo; ry += yo; dof++; }
   }
 
@@ -204,11 +209,132 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
   while (dof < 8) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
-    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); }
+    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; }
     else { rx += xo; ry += yo; dof++; }
   }
 
-  return disV < disH ? { dist: disV, vertical: true } : { dist: disH, vertical: false };
+  if (disV < disH) {
+    const t = vy / U; // hit on a vertical face → texture runs along Y
+    return { dist: disV, vertical: true, tex: (t - Math.floor(t)) * 64 };
+  }
+  const t = hx / U; // horizontal face → texture runs along X
+  return { dist: disH, vertical: false, tex: (t - Math.floor(t)) * 64 };
+}
+
+// ---------------------------------------------------------------------------
+// runtime assets — authentic Wolf3D textures/sprites decoded by `rust/wl-extract`
+// from a user-provided VSWAP.WL1 into /wolf/*.png. Never committed; absent by
+// default, in which case the renderer falls back to the procedural art below.
+// ---------------------------------------------------------------------------
+const WALL_TEX = 0; // wall page used for our 0/1 map (0 = dark face, 1 = light face)
+type Assets = { wall: HTMLCanvasElement; wallLit: HTMLCanvasElement; sprites: Map<number, HTMLCanvasElement> };
+let assets: Assets | null = null;
+
+const tmp = document.createElement("canvas");
+tmp.width = tmp.height = 64;
+const tmpCtx = tmp.getContext("2d")!;
+tmpCtx.imageSmoothingEnabled = false;
+
+function loadImg64(url: string): Promise<HTMLCanvasElement | null> {
+  return new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 64;
+      const cx = c.getContext("2d")!;
+      cx.imageSmoothingEnabled = false;
+      cx.drawImage(img, 0, 0, 64, 64);
+      res(c);
+    };
+    img.onerror = () => res(null);
+    img.src = url;
+  });
+}
+
+async function loadAssets(): Promise<Assets | null> {
+  let manifest: any;
+  try {
+    const r = await fetch("/wolf/manifest.json");
+    if (!r.ok) return null;
+    manifest = await r.json();
+  } catch {
+    return null;
+  }
+  if (!manifest?.sprites_written) return null;
+  const p3 = (n: number) => String(n).padStart(3, "0");
+  const wall = await loadImg64(`/wolf/wall_${p3(WALL_TEX)}.png`);
+  if (!wall) return null;
+  const wallLit = (await loadImg64(`/wolf/wall_${p3(WALL_TEX + 1)}.png`)) ?? wall;
+  const sprites = new Map<number, HTMLCanvasElement>();
+  for (let i = 50; i <= 98; i++) {
+    // guard frames: SPR_GRD_S_1=50 … SPR_GRD_SHOOT3=98
+    const c = await loadImg64(`/wolf/sprite_${p3(i)}.png`);
+    if (c) sprites.set(i, c);
+  }
+  return { wall, wallLit, sprites };
+}
+
+// our guard `state`+`dir` → Wolf3D sprite index (enum order; SPR_GRD_S_1 = 50).
+// directional frames use CalcRotate (WL_DRAW.C): rot = ((angTo-180) - dir*45 + 22.5)/45.
+function calcRotate(g: Guard, angTo: number): number {
+  const dir = g.dir >= 0 && g.dir < 8 ? g.dir : 0;
+  let a = angTo - 180 - dir * 45 + 22.5;
+  a = ((a % 360) + 360) % 360;
+  return Math.floor(a / 45) & 7;
+}
+function guardSprite(g: Guard, angTo: number): number {
+  const s = g.state;
+  if (isFiring(s)) return 96 + (s - S_SHOOT1); // SHOOT1..3 = 96..98
+  if (isPain(s)) return s === S_PAIN ? 90 : 94; // PAIN_1=90, PAIN_2=94
+  if (isDead(s)) { const k = s - S_DIE1; return k < 3 ? 91 + k : 95; } // DIE_1..3=91..93, DEAD=95
+  const rot = calcRotate(g, angTo);
+  if (s === S_STAND) return 50 + rot; // SPR_GRD_S_1=50 (8 rotations)
+  const wf = [0, 0, 1, 2, 2, 3][s - S_CHASE1] ?? 0; // chase1,1s,2,3,3s,4 → walk W1..W4
+  return 58 + wf * 8 + rot; // SPR_GRD_W1_1=58
+}
+
+/** Draw a guard using a real Wolf3D sprite frame, depth-tested per column. */
+function drawGuardSprite(px: number, py: number, pa: number, g: Guard, clock: number, A: Assets) {
+  const dx = toU(g.x) - px, dy = toU(g.y) - py;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  const angTo = Math.atan2(-dy, dx) / DR;
+  const rel = normDeg(angTo - pa);
+  if (Math.abs(rel) > FOV / 2 + 30) return;
+  const perp = dist * Math.cos(rel * DR);
+  if (perp < 1) return;
+  const img = A.sprites.get(guardSprite(g, angTo));
+  if (!img) { drawGuard(px, py, pa, g, clock); return; } // missing frame → procedural
+
+  const cx = VW / 2 - (rel / (FOV / 2)) * (VW / 2);
+  const wallH = (U / perp) * PROJ;
+  const floorY = VH / 2 + wallH / 2;
+  const sprH = wallH, sprW = wallH; // 64x64 sprite fills the tile cube
+  const top = floorY - sprH;
+  const left = cx - sprW / 2;
+
+  // distance-shade a copy while preserving the sprite's transparency
+  const shade = Math.max(0.32, Math.min(1, 1.18 - perp / 760));
+  let src: HTMLCanvasElement = img;
+  if (shade < 0.98) {
+    tmpCtx.globalCompositeOperation = "source-over";
+    tmpCtx.clearRect(0, 0, 64, 64);
+    tmpCtx.drawImage(img, 0, 0);
+    tmpCtx.globalCompositeOperation = "source-atop";
+    tmpCtx.fillStyle = `rgba(0,0,0,${1 - shade})`;
+    tmpCtx.fillRect(0, 0, 64, 64);
+    tmpCtx.globalCompositeOperation = "source-over";
+    src = tmp;
+  }
+
+  const x0 = Math.max(0, Math.floor(left)), x1 = Math.min(VW - 1, Math.ceil(left + sprW));
+  for (let xs = x0; xs <= x1; xs++) {
+    if (perp > zbuf[xs] + 0.5) continue; // occluded by a nearer wall
+    const u = (xs - left) / sprW;
+    if (u < 0 || u >= 1) continue;
+    const sx = Math.min(63, Math.floor(u * 64));
+    vctx.drawImage(src, sx, 0, 1, 64, xs, top, 1, sprH);
+  }
 }
 
 // procedural guard sprite (16x24), sampled per column with the wall z-buffer.
@@ -338,17 +464,30 @@ function renderView(s: State, clock: number, fx: Fx) {
     if (lineH > VH * 3) lineH = VH * 3;
     const top = VH / 2 - lineH / 2;
     const shade = Math.max(0.16, Math.min(1, 1.25 - perp / 760));
-    const side = hit.vertical ? 1 : 0.74; // darken N/S faces for depth cue
-    const r = (150 * shade * side) | 0, gg = (132 * shade * side) | 0, b = (108 * shade * side) | 0;
-    vctx.fillStyle = `rgb(${r},${gg},${b})`;
-    vctx.fillRect(c, top, 1, lineH);
+    if (assets) {
+      // real Wolf3D texture: blit a 1px-wide source column scaled to the wall height
+      const tex = hit.vertical ? assets.wall : assets.wallLit;
+      const sx = Math.min(63, Math.max(0, Math.floor(hit.tex)));
+      vctx.drawImage(tex, sx, 0, 1, 64, c, top, 1, lineH);
+      let darkA = 1 - shade;
+      if (!hit.vertical) darkA = Math.min(0.9, darkA + 0.22); // darken N/S faces
+      if (darkA > 0.02) { vctx.fillStyle = `rgba(0,0,0,${darkA})`; vctx.fillRect(c, top, 1, lineH); }
+    } else {
+      const side = hit.vertical ? 1 : 0.74; // darken N/S faces for depth cue
+      const r = (150 * shade * side) | 0, gg = (132 * shade * side) | 0, b = (108 * shade * side) | 0;
+      vctx.fillStyle = `rgb(${r},${gg},${b})`;
+      vctx.fillRect(c, top, 1, lineH);
+    }
   }
 
   // guards (depth-sorted far→near so nearer overdraw wins)
   const order = s.guards
     .map((g) => ({ g, d: Math.hypot(toU(g.x) - px, toU(g.y) - py) }))
     .sort((a, b) => b.d - a.d);
-  for (const { g } of order) drawGuard(px, py, pa, g, clock);
+  for (const { g } of order) {
+    if (assets) drawGuardSprite(px, py, pa, g, clock, assets);
+    else drawGuard(px, py, pa, g, clock);
+  }
 
   drawWeapon(clock, fx);
 
@@ -511,6 +650,7 @@ function renderDbg(s: State, tick: number, gas: number | null) {
   dbg.textContent =
     `tick      ${tick}\n` +
     `gas/input ${gas != null ? gas.toLocaleString() : "—"}\n` +
+    `art       ${assets ? "real id (VSWAP)" : "procedural"}\n` +
     `rndindex  ${s.rndindex}\n\n` +
     `player\n` +
     `  health  ${s.player.health}\n` +
@@ -562,7 +702,9 @@ let tick = 0;
 let lastGas: number | null = null;
 
 async function main() {
-  dbg.textContent = "deploying Engine / Map / Session to anvil…";
+  vctx.imageSmoothingEnabled = false; // crisp texels
+  dbg.textContent = "loading assets / deploying Engine / Map / Session to anvil…";
+  assets = await loadAssets(); // authentic id art if /wolf/*.png present, else procedural
   const engine = await deploy(EngineA, []);
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(), 8n, 8n, 1n, "0x0c0804" as Hex, // guard at tile (12,8) dir west

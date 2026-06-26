@@ -22,6 +22,8 @@ VSWAP*
 VGAGRAPH*
 VGADICT*
 VGAHEAD*
+# textures/sprites decoded from a user-provided VSWAP by `wl-extract` (id art)
+/web/public/wolf/
 
 # verification artifacts
 /.playwright-mcp/

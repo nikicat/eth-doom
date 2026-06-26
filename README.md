@@ -21,7 +21,8 @@ reference/   cloned wolf3d + sage-raycaster (read-only; not committed — see be
              the client's DDA wall march is adapted from sage-raycaster, MIT)
 oracle/      carved C sim → headless sim_oracle (differential ground truth)
 contracts/   Foundry: Engine / Map / Session + Fixed/Trig/Rng libs (Solidity)
-rust/        cargo workspace: harness (differential + gas) · map-extract · client-core (stubs)
+rust/        cargo workspace: harness (differential + gas) · wl-extract (VSWAP→PNG textures/
+             sprites) · map-extract · client-core (stubs)
 web/         TypeScript + Vite + viem top-down client
 vectors/     golden input + per-tick snapshot files (committed)
 ```
