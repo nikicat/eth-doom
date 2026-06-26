@@ -13,6 +13,9 @@ int      numenemies;
 void    *actorat[MAPSIZE][MAPSIZE];
 int      tics = 1;
 int      plux, pluy;
+long     thrustspeed;
+int      health = 100;   /* gamestate.health */
+int      playerdead;     /* playstate == ex_died */
 
 static unsigned char areabyplayer[64];   /* single-area map: all reachable */
 static int doorposition[256];             /* no doors in M2 (kept for CheckLine) */
@@ -358,9 +361,42 @@ static void T_Chase(objtype *ob) {
     }
 }
 
-/* Stubs filled in later milestones. */
 static void T_Stand(objtype *ob) { (void)ob; }   /* SightPlayer — M2b+ */
-static void T_Shoot(objtype *ob) { (void)ob; }   /* hitscan damage — M2c */
+
+/* WL_AGENT.C TakeDamage (core: rendering/flash/difficulty=baby/godmode dropped). */
+static void TakeDamage(int points, objtype *attacker) {
+    (void)attacker;
+    health -= points;
+    if (health <= 0) {
+        health = 0;
+        playerdead = 1;
+    }
+}
+
+/* WL_ACT2.C T_Shoot (guard). FL_VISABLE is render-derived, hence always false in
+ * the headless sim (same on both sides) — so only the non-visible hitchance
+ * branches apply. Sounds dropped. */
+static void T_Shoot(objtype *ob) {
+    int dx, dy, dist, hitchance, damage;
+
+    if (!CheckLine(ob)) return; /* player behind a wall */
+
+    dx = abs((int)ob->tilex - (int)player->tilex);
+    dy = abs((int)ob->tiley - (int)player->tiley);
+    dist = dx > dy ? dx : dy;
+
+    if (thrustspeed >= RUNSPEED)
+        hitchance = 160 - dist * 8;
+    else
+        hitchance = 256 - dist * 8;
+
+    if (US_RndT() < hitchance) {
+        if (dist < 2)      damage = US_RndT() >> 2;
+        else if (dist < 4) damage = US_RndT() >> 3;
+        else               damage = US_RndT() >> 4;
+        TakeDamage(damage, ob);
+    }
+}
 
 static void dispatch_think(int id, objtype *ob) {
     switch (id) {

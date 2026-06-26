@@ -127,6 +127,7 @@ void Thrust(int angle, long speed)
 {
     long xmove, ymove;
 
+    thrustspeed += speed;
     if (speed >= MINDIST * 2)
         speed = MINDIST * 2 - 1;
 
@@ -146,6 +147,7 @@ void ControlMovement(objtype *ob)
     int  angle;
     int  angleunits;
 
+    thrustspeed = 0;
     oldx = player->x;
     oldy = player->y;
 

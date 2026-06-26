@@ -41,6 +41,7 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define UNSIGNEDSHIFT 8           /* 1/256-tile precision */
 #define SPDPATROL     512L        /* guard patrol speed; chase = *3 */
 #define MINSIGHT      0x18000L
+#define RUNSPEED      6000        /* player thrustspeed for "running" (T_Shoot) */
 /* actor flags */
 #define FL_SHOOTABLE   1
 #define FL_NEVERMARK   4
@@ -99,6 +100,8 @@ extern fixed *costable;
 
 extern int   anglefrac;                 /* persistent sub-degree turn accumulator */
 extern long  playerxmove, playerymove;
+extern long  thrustspeed;               /* total player thrust this tic (T_Shoot) */
+extern int   health, playerdead;        /* gamestate.health; ex_died flag */
 
 extern objtype  playerent;
 extern objtype *player;

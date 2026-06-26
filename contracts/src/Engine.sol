@@ -24,6 +24,7 @@ contract Engine {
     int256 internal constant BACKMOVESCALE = 100;
     int256 internal constant ANGLESCALE = 20;
     int256 internal constant SPDPATROL = 512;
+    int256 internal constant RUNSPEED = 6000;
     int256 internal constant TICS = 1;
     uint8 internal constant BT_STRAFE = 0x02;
 
@@ -63,6 +64,7 @@ contract Engine {
         uint256 tilex;
         uint256 tiley;
         int256 anglefrac;
+        int256 health;
     }
 
     struct Actor {
@@ -99,6 +101,7 @@ contract Engine {
         bytes rnd;
         int256 plux;
         int256 pluy;
+        int256 thrustspeed;
     }
 
     // ---------------- public API ----------------
@@ -112,6 +115,7 @@ contract Engine {
         if (wd.p.angle < 0) wd.p.angle += ANGLES;
         wd.p.tilex = uint256(wd.p.x >> 16);
         wd.p.tiley = uint256(wd.p.y >> 16);
+        wd.p.health = 100;
 
         bytes memory guards = IMap(map).guards(); // 3 bytes each: tilex,tiley,dir
         uint256 n = guards.length / 3;
@@ -170,6 +174,7 @@ contract Engine {
     function _controlMovement(World memory wd, Cmd calldata cmd) internal pure {
         Player memory p = wd.p;
         int256 angle;
+        wd.thrustspeed = 0;
         if ((cmd.buttons & BT_STRAFE) != 0) {
             if (cmd.controlx > 0) {
                 angle = p.angle - ANGLES / 4;
@@ -198,6 +203,7 @@ contract Engine {
     }
 
     function _thrust(World memory wd, int256 angle, int256 speed) internal pure {
+        wd.thrustspeed += speed;
         if (speed >= MINDIST * 2) speed = MINDIST * 2 - 1;
         int256 xmove = Fixed.fixedByFrac(speed, Trig.cosAt(wd.trig, uint256(angle)));
         int256 ymove = -Fixed.fixedByFrac(speed, Trig.sinAt(wd.trig, uint256(angle)));
@@ -531,6 +537,29 @@ contract Engine {
         }
     }
 
+    /// WL_ACT2.C T_Shoot (guard). FL_VISABLE is render-derived => always false in
+    /// the headless sim (same on both sides), so only the non-visible branch applies.
+    function _tShoot(World memory wd, Actor memory a) internal pure {
+        if (!_checkLine(wd, a)) return;
+        int256 dx = _abs(int256(a.tilex) - int256(wd.p.tilex));
+        int256 dy = _abs(int256(a.tiley) - int256(wd.p.tiley));
+        int256 dist = dx > dy ? dx : dy;
+        int256 hitchance = (wd.thrustspeed >= RUNSPEED) ? 160 - dist * 8 : 256 - dist * 8;
+        if (int256(_rnd(wd)) < hitchance) {
+            int256 damage;
+            if (dist < 2) damage = int256(_rnd(wd)) >> 2;
+            else if (dist < 4) damage = int256(_rnd(wd)) >> 3;
+            else damage = int256(_rnd(wd)) >> 4;
+            _takeDamage(wd, damage);
+        }
+    }
+
+    /// WL_AGENT.C TakeDamage (core; difficulty/godmode/flash dropped).
+    function _takeDamage(World memory wd, int256 points) internal pure {
+        wd.p.health -= points;
+        if (wd.p.health <= 0) wd.p.health = 0;
+    }
+
     /// WL_PLAY.C DoActor — state-machine advance (no actorat marking; single guard).
     function _doActor(World memory wd, Actor memory a) internal pure {
         (uint256 tictime, uint256 think, uint256 action, uint256 nxt) = _gstate(a.state);
@@ -543,7 +572,7 @@ contract Engine {
         a.ticcount -= TICS;
         while (a.ticcount <= 0) {
             (, , action, nxt) = _gstate(a.state);
-            _action(a, action);
+            _action(wd, a, action);
             a.state = nxt;
             (tictime, think, , nxt) = _gstate(a.state);
             if (tictime == 0) {
@@ -561,8 +590,8 @@ contract Engine {
         // TH_STAND (SightPlayer) and TH_PATH stubbed for later milestones
     }
 
-    function _action(Actor memory, uint256) internal pure {
-        // AC_SHOOT (hitscan) / AC_DEATHSCREAM are M2c; no-op here
+    function _action(World memory wd, Actor memory a, uint256 id) internal pure {
+        if (id == 1) _tShoot(wd, a); // AC_SHOOT; AC_DEATHSCREAM (2) is render-only
     }
 
     function _newState(Actor memory a, uint256 state) internal pure {
@@ -676,6 +705,7 @@ contract Engine {
         w |= uint256(uint32(int32(p.anglefrac))) << 80;
         w |= uint256(uint8(p.tilex)) << 112;
         w |= uint256(uint8(p.tiley)) << 120;
+        w |= uint256(uint16(int16(p.health))) << 128;
     }
 
     function _unpackPlayer(uint256 w) internal pure returns (Player memory p) {
@@ -685,6 +715,7 @@ contract Engine {
         p.anglefrac = int256(int32(uint32(w >> 80)));
         p.tilex = uint256(uint8(w >> 112));
         p.tiley = uint256(uint8(w >> 120));
+        p.health = int256(int16(uint16(w >> 128)));
     }
 
     function _packActor(Actor memory a) internal pure returns (uint256 w) {

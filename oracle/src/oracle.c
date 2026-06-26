@@ -16,9 +16,9 @@
 static void emit(long tick)
 {
     printf("{\"tick\":%ld,\"x\":%ld,\"y\":%ld,\"angle\":%d,"
-           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d",
+           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d,\"health\":%d",
            tick, (long)player->x, (long)player->y, player->angle,
-           player->tilex, player->tiley, anglefrac);
+           player->tilex, player->tiley, anglefrac, health);
     if (numenemies > 0) {
         printf(",\"rng\":%d,\"guards\":[", rndindex);
         for (int i = 0; i < numenemies; i++) {

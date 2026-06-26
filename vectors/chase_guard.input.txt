@@ -1,80 +1,300 @@
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
 0 0 0
-# player idle; watch the guard chase west
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
+0 0 0
+# player idle; guard chases and shoots
 0 0 0
