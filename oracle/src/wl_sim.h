@@ -37,11 +37,58 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define bt_use    3
 #define NUMBUTTONS 8
 
-/* Minimal actor; expands for enemy AI in M2. */
+/* --- enemy AI constants (WL_DEF.H / WL_STATE.C) --- */
+#define UNSIGNEDSHIFT 8           /* 1/256-tile precision */
+#define SPDPATROL     512L        /* guard patrol speed; chase = *3 */
+#define MINSIGHT      0x18000L
+/* actor flags */
+#define FL_SHOOTABLE   1
+#define FL_NEVERMARK   4
+#define FL_ATTACKMODE  16
+#define FL_FIRSTATTACK 32
+#define FL_NONMARK     128
+
+/* WL_DEF.H dirtype — order matters (opposite[]/diagonal[][] indexing). */
+typedef enum { east, northeast, north, northwest, west, southwest, south, southeast, nodir } dirtype;
+
+/* WL_DEF.H classtype (subset we simulate). */
+typedef enum { nothing, playerobj, inertobj, guardobj } classtype;
+
+/* activetype */
+enum { ac_no, ac_yes, ac_allways };
+
+/* think / action dispatch ids (replaces C function pointers) */
+enum { TH_NONE, TH_STAND, TH_CHASE, TH_PATH };
+enum { AC_NONE, AC_SHOOT, AC_DEATHSCREAM };
+
+/* WL_ACT2.C guard state graph, as a flat indexed table (shapenum dropped — render-only). */
+enum {
+    S_GRDSTAND,
+    S_GRDCHASE1, S_GRDCHASE1S, S_GRDCHASE2, S_GRDCHASE3, S_GRDCHASE3S, S_GRDCHASE4,
+    S_GRDSHOOT1, S_GRDSHOOT2, S_GRDSHOOT3,
+    S_GRDDIE1, S_GRDDIE2, S_GRDDIE3, S_GRDDIE4,
+    NUMSTATES
+};
+
+/* WL_DEF.H statetype, minus the render shapenum. */
+typedef struct { int tictime; int think; int action; int next; } statedef;
+
+/* WL_DEF.H objtype (sim-relevant fields). Movement uses x,y,angle,tilex,tiley. */
 typedef struct objstruct {
+    int      active;        /* activetype */
+    int      ticcount;
+    int      obclass;       /* classtype */
+    int      state;         /* index into gstates */
+    unsigned char flags;
+    long     distance;      /* to next tile, or -doornum-1 */
+    int      dir;           /* dirtype */
     fixed    x, y;          /* world position (16.16) */
-    int      angle;         /* 0..ANGLES-1 */
     unsigned tilex, tiley;
+    unsigned char areanumber;
+    int      angle;         /* 0..ANGLES-1 (player) */
+    int      hitpoints;
+    long     speed;
+    int      temp1;
 } objtype;
 
 /* --- globals (defined in wl_sim.c) --- */
@@ -53,7 +100,7 @@ extern fixed *costable;
 extern int   anglefrac;                 /* persistent sub-degree turn accumulator */
 extern long  playerxmove, playerymove;
 
-extern objtype  playerobj;
+extern objtype  playerent;
 extern objtype *player;
 
 /* Walls: 1..63 = solid, 0 = passable (plane-0 tile semantics). */
@@ -66,6 +113,19 @@ extern int buttonstate[NUMBUTTONS];
 extern int rndindex;
 void US_InitRndT(int randomize);
 int  US_RndT(void);
+
+/* --- enemy actors (wl_actor.c) --- */
+#define MAXENEMIES 64
+extern objtype  enemies[MAXENEMIES];
+extern int      numenemies;
+extern void    *actorat[MAPSIZE][MAPSIZE]; /* walls (tile value <256) or actor ptr */
+extern int      tics;                      /* 1 in our 1-input-1-tick model */
+extern int      plux, pluy;                /* player 1/256 coords (for CheckLine) */
+extern const statedef gstates[NUMSTATES];
+
+void InitActors(void);                     /* clear lists, seed actorat from walls */
+void SpawnGuard(int tilex, int tiley, int dir);
+void DoActor(objtype *ob);                 /* WL_PLAY.C state-machine advance */
 
 /* --- API --- */
 void  BuildTables(void);                 /* WL_MAIN.C */

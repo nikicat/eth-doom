@@ -15,5 +15,9 @@ run() { # <name> <map> <sx> <sy> <dir>
 
 run move_basic test_room.txt 8 8 1
 
+# chase: a guard at (12,8) chases an idle player at (8,8)
+"$ORACLE" oracle/maps/test_room.txt vectors/chase_guard.input.txt 8 8 1 12 8 4 \
+    > vectors/chase_guard.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl

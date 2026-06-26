@@ -16,9 +16,20 @@
 static void emit(long tick)
 {
     printf("{\"tick\":%ld,\"x\":%ld,\"y\":%ld,\"angle\":%d,"
-           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d}\n",
+           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d",
            tick, (long)player->x, (long)player->y, player->angle,
            player->tilex, player->tiley, anglefrac);
+    if (numenemies > 0) {
+        printf(",\"rng\":%d,\"guards\":[", rndindex);
+        for (int i = 0; i < numenemies; i++) {
+            objtype *g = &enemies[i];
+            printf("%s{\"x\":%ld,\"y\":%ld,\"dir\":%d,\"st\":%d,\"hp\":%d,\"tc\":%d,\"dist\":%ld}",
+                   i ? "," : "", (long)g->x, (long)g->y, g->dir, g->state,
+                   g->hitpoints, g->ticcount, (long)g->distance);
+        }
+        printf("]");
+    }
+    printf("}\n");
 }
 
 static void load_map(const char *path)
@@ -64,14 +75,18 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (argc != 6) {
-        fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir>\n", argv[0]);
+    if (argc != 6 && argc != 9) {
+        fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir> [gx gy gdir]\n", argv[0]);
         return 1;
     }
 
     BuildTables();
     load_map(argv[1]);
+    InitActors();
+    US_InitRndT(0);
     SpawnPlayer(atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
+    if (argc == 9)
+        SpawnGuard(atoi(argv[6]), atoi(argv[7]), atoi(argv[8]));
     emit(tick); /* tic 0: initial state */
 
     f = fopen(argv[2], "r");
@@ -90,6 +105,10 @@ int main(int argc, char **argv)
             buttonstate[b] = (btns >> b) & 1;
 
         ControlMovement(player);
+        plux = player->x >> UNSIGNEDSHIFT;
+        pluy = player->y >> UNSIGNEDSHIFT;
+        for (int e = 0; e < numenemies; e++)
+            DoActor(&enemies[e]);
         emit(++tick);
     }
     fclose(f);

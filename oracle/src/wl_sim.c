@@ -10,8 +10,8 @@ fixed *costable = sintable + ANGLEQUAD;
 int   anglefrac;
 long  playerxmove, playerymove;
 
-objtype  playerobj;
-objtype *player = &playerobj;
+objtype  playerent;
+objtype *player = &playerent;
 
 unsigned char tilemap[MAPSIZE][MAPSIZE];
 
