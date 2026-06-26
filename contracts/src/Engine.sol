@@ -119,7 +119,7 @@ contract Engine {
         for (uint256 i = 0; i < n; i++) {
             _spawnGuard(wd.actors[i], uint8(guards[i * 3]), uint8(guards[i * 3 + 1]));
         }
-        return abi.encode(wd.p, wd.actors, wd.rndindex);
+        return _pack(wd);
     }
 
     function tick(bytes calldata state, address map, Cmd calldata cmd)
@@ -128,8 +128,7 @@ contract Engine {
         returns (bytes memory)
     {
         World memory wd = _load(map);
-        (wd.p, wd.actors, wd.rndindex) =
-            abi.decode(state, (Player, Actor[], uint256));
+        (wd.p, wd.actors, wd.rndindex) = _unpack(state);
 
         _controlMovement(wd, cmd);
         wd.plux = wd.p.x >> 8; // UNSIGNEDSHIFT
@@ -137,7 +136,7 @@ contract Engine {
         for (uint256 i = 0; i < wd.actors.length; i++) {
             _doActor(wd, wd.actors[i]);
         }
-        return abi.encode(wd.p, wd.actors, wd.rndindex);
+        return _pack(wd);
     }
 
     // ---------------- setup ----------------
@@ -620,5 +619,103 @@ contract Engine {
 
     function _abs(int256 v) internal pure returns (int256) {
         return v < 0 ? -v : v;
+    }
+
+    // ---------------- state codec: header + 1 word/player + 1 word/actor ----------------
+    // header: rndindex:uint8@0 | numactors:uint8@8
+    // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 | tiley:uint8@120
+    // actor:  x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88 |
+    //         ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 |
+    //         obclass:uint8@168 | speed:int32@176 | active:uint8@208
+
+    function _pack(World memory wd) internal pure returns (bytes memory out) {
+        uint256 n = wd.actors.length;
+        out = new bytes(32 * (2 + n));
+        uint256 header = (wd.rndindex & 0xff) | ((n & 0xff) << 8);
+        uint256 pw = _packPlayer(wd.p);
+        assembly {
+            mstore(add(out, 0x20), header)
+            mstore(add(out, 0x40), pw)
+        }
+        for (uint256 i = 0; i < n; i++) {
+            uint256 aw = _packActor(wd.actors[i]);
+            assembly {
+                mstore(add(add(out, 0x60), mul(i, 0x20)), aw)
+            }
+        }
+    }
+
+    function _unpack(bytes calldata b)
+        internal
+        pure
+        returns (Player memory p, Actor[] memory actors, uint256 rndindex)
+    {
+        uint256 header;
+        uint256 pw;
+        assembly {
+            header := calldataload(b.offset)
+            pw := calldataload(add(b.offset, 0x20))
+        }
+        rndindex = header & 0xff;
+        uint256 n = (header >> 8) & 0xff;
+        p = _unpackPlayer(pw);
+        actors = new Actor[](n);
+        for (uint256 i = 0; i < n; i++) {
+            uint256 aw;
+            assembly {
+                aw := calldataload(add(b.offset, add(0x40, mul(i, 0x20))))
+            }
+            actors[i] = _unpackActor(aw);
+        }
+    }
+
+    function _packPlayer(Player memory p) internal pure returns (uint256 w) {
+        w = uint256(uint32(int32(p.x)));
+        w |= uint256(uint32(int32(p.y))) << 32;
+        w |= uint256(uint16(int16(p.angle))) << 64;
+        w |= uint256(uint32(int32(p.anglefrac))) << 80;
+        w |= uint256(uint8(p.tilex)) << 112;
+        w |= uint256(uint8(p.tiley)) << 120;
+    }
+
+    function _unpackPlayer(uint256 w) internal pure returns (Player memory p) {
+        p.x = int256(int32(uint32(w)));
+        p.y = int256(int32(uint32(w >> 32)));
+        p.angle = int256(int16(uint16(w >> 64)));
+        p.anglefrac = int256(int32(uint32(w >> 80)));
+        p.tilex = uint256(uint8(w >> 112));
+        p.tiley = uint256(uint8(w >> 120));
+    }
+
+    function _packActor(Actor memory a) internal pure returns (uint256 w) {
+        w = uint256(uint32(int32(a.x)));
+        w |= uint256(uint32(int32(a.y))) << 32;
+        w |= uint256(uint8(a.tilex)) << 64;
+        w |= uint256(uint8(a.tiley)) << 72;
+        w |= (uint256(a.dir) & 0xff) << 80;
+        w |= (a.state & 0xff) << 88;
+        w |= uint256(uint16(int16(a.ticcount))) << 96;
+        w |= uint256(uint32(int32(a.distance))) << 112;
+        w |= uint256(uint16(int16(a.hitpoints))) << 144;
+        w |= uint256(a.flags) << 160;
+        w |= uint256(a.obclass) << 168;
+        w |= uint256(uint32(int32(a.speed))) << 176;
+        w |= uint256(a.active) << 208;
+    }
+
+    function _unpackActor(uint256 w) internal pure returns (Actor memory a) {
+        a.x = int256(int32(uint32(w)));
+        a.y = int256(int32(uint32(w >> 32)));
+        a.tilex = uint256(uint8(w >> 64));
+        a.tiley = uint256(uint8(w >> 72));
+        a.dir = int256(uint256(uint8(w >> 80)));
+        a.state = uint256(uint8(w >> 88));
+        a.ticcount = int256(int16(uint16(w >> 96)));
+        a.distance = int256(int32(uint32(w >> 112)));
+        a.hitpoints = int256(int16(uint16(w >> 144)));
+        a.flags = uint8(w >> 160);
+        a.obclass = uint8(w >> 168);
+        a.speed = int256(int32(uint32(w >> 176)));
+        a.active = uint8(w >> 208);
     }
 }

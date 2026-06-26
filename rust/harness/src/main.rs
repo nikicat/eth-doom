@@ -7,7 +7,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use alloy::dyn_abi::{DynSolType, DynSolValue};
 use alloy::primitives::{Bytes, I256, U256};
 use alloy::providers::ProviderBuilder;
 use anyhow::{anyhow, bail, Result};
@@ -27,33 +26,19 @@ fn repo(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(path)
 }
 
-/// DynSolType for the engine's `abi.encode(Player, Actor[], rndindex)`.
-fn world_type() -> DynSolType {
-    let player = DynSolType::Tuple(vec![
-        DynSolType::Int(256), DynSolType::Int(256), DynSolType::Int(256),
-        DynSolType::Uint(256), DynSolType::Uint(256), DynSolType::Int(256),
-    ]);
-    let actor = DynSolType::Tuple(vec![
-        DynSolType::Int(256), DynSolType::Int(256), DynSolType::Uint(256), DynSolType::Uint(256),
-        DynSolType::Int(256), DynSolType::Uint(256), DynSolType::Int(256), DynSolType::Int(256),
-        DynSolType::Int(256), DynSolType::Uint(8), DynSolType::Uint(8), DynSolType::Int(256),
-        DynSolType::Uint(8),
-    ]);
-    DynSolType::Tuple(vec![player, DynSolType::Array(Box::new(actor)), DynSolType::Uint(256)])
+// --- packed state readers (must match Engine.sol's _pack layout) ---
+fn word(state: &[u8], i: usize) -> U256 {
+    U256::from_be_slice(&state[i * 32..(i + 1) * 32])
 }
-
-fn as_i(v: &DynSolValue) -> i64 {
-    match v {
-        DynSolValue::Int(x, _) => i128::try_from(*x).unwrap() as i64,
-        DynSolValue::Uint(x, _) => x.to::<u64>() as i64,
-        _ => panic!("not a number: {v:?}"),
-    }
+fn field(w: U256, shift: usize, bits: usize) -> u64 {
+    let mask = (U256::from(1u64) << bits) - U256::from(1u64);
+    ((w >> shift) & mask).to::<u64>()
 }
-fn tup(v: &DynSolValue) -> &Vec<DynSolValue> {
-    match v { DynSolValue::Tuple(t) => t, _ => panic!("not a tuple") }
+fn s32(w: U256, shift: usize) -> i64 {
+    field(w, shift, 32) as u32 as i32 as i64
 }
-fn arr(v: &DynSolValue) -> &Vec<DynSolValue> {
-    match v { DynSolValue::Array(t) => t, _ => panic!("not an array") }
+fn s16(w: U256, shift: usize) -> i64 {
+    field(w, shift, 16) as u16 as i16 as i64
 }
 
 /// One golden snapshot line.
@@ -124,27 +109,42 @@ fn load_inputs(path: &str) -> Result<Vec<(i64, i64, u8)>> {
 }
 
 fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
-    let decoded = world_type().abi_decode_params(state)?;
-    let top = tup(&decoded);
-    let p = tup(&top[0]);
-    let pl = [as_i(&p[0]), as_i(&p[1]), as_i(&p[2]), as_i(&p[3]), as_i(&p[4]), as_i(&p[5])];
-    if pl != want.player {
-        bail!("tic {tick} PLAYER mismatch\n  got  {:?}\n  want {:?}", pl, want.player);
+    let header = word(state, 0);
+    let rnd = field(header, 0, 8) as i64;
+    let n = field(header, 8, 8) as usize;
+
+    let pw = word(state, 1);
+    let player = [
+        s32(pw, 0),               // x
+        s32(pw, 32),              // y
+        field(pw, 64, 16) as i64, // angle
+        field(pw, 112, 8) as i64, // tilex
+        field(pw, 120, 8) as i64, // tiley
+        s32(pw, 80),              // anglefrac
+    ];
+    if player != want.player {
+        bail!("tic {tick} PLAYER mismatch\n  got  {:?}\n  want {:?}", player, want.player);
     }
-    let actors = arr(&top[1]);
-    let rnd = as_i(&top[2]);
     if let Some(wr) = want.rng {
         if rnd != wr {
             bail!("tic {tick} RNG mismatch: got {} want {}", rnd, wr);
         }
     }
-    if actors.len() != want.guards.len() {
-        bail!("tic {tick} guard count: got {} want {}", actors.len(), want.guards.len());
+    if n != want.guards.len() {
+        bail!("tic {tick} guard count: got {} want {}", n, want.guards.len());
     }
-    for (k, av) in actors.iter().enumerate() {
-        let a = tup(av);
+    for k in 0..n {
+        let aw = word(state, 2 + k);
         // golden guard order: x, y, dir, state, hp, ticcount, distance
-        let got = [as_i(&a[0]), as_i(&a[1]), as_i(&a[4]), as_i(&a[5]), as_i(&a[8]), as_i(&a[6]), as_i(&a[7])];
+        let got = [
+            s32(aw, 0),
+            s32(aw, 32),
+            field(aw, 80, 8) as i64,
+            field(aw, 88, 8) as i64,
+            s16(aw, 144),
+            s16(aw, 96),
+            s32(aw, 112),
+        ];
         if got != want.guards[k] {
             bail!("tic {tick} GUARD{k} mismatch\n  got  {:?}\n  want {:?}", got, want.guards[k]);
         }
