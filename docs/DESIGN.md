@@ -16,8 +16,8 @@ One input = one tick: `Session.submitInput(cmd)` advances the world exactly one 
 on-chain (Solidity, anvil → MegaETH)     off-chain                         build-time
 ────────────────────────────────────     ─────────                         ──────────
 Engine   stateless sim (the logic)        rust/harness  differential+gas    oracle/  C sim_oracle
-Map      immutable level data + guards     web/         TS/viem top-down     (ground truth) →
-Session  per-game packed world state                    live view            golden vectors
+Map      immutable level data + guards     web/         TS/viem first-person (ground truth) →
+Session  per-game packed world state                    raycaster view       golden vectors
 ```
 
 ### Contract decomposition
@@ -94,7 +94,7 @@ are deviations from id's *render-coupled* code, not between our two implementati
 | contracts (`Engine`/`Map`/`Session`) | Solidity | Foundry (`via_ir`) |
 | sim oracle (ground truth) | C | cc/make |
 | differential + gas harness | Rust | alloy + in-process anvil |
-| client (top-down view) | TypeScript | Vite + viem |
+| client (first-person view + HUD) | TypeScript | Vite + viem; DDA raycaster adapted from 3DSage (MIT) |
 
 `reference/` (id's Wolf3D source) is **not committed** — it's under a restrictive license; clone
 commands are in the root README. No id game assets are committed.

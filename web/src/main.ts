@@ -22,33 +22,39 @@ const transport = http("http://127.0.0.1:8545");
 const wallet = createWalletClient({ account, chain: foundry, transport });
 const pub = createPublicClient({ chain: foundry, transport });
 
+// ---------------------------------------------------------------------------
+// World / map  (positions are 16.16 fixed-point; 1 tile = TILEGLOBAL)
+// ---------------------------------------------------------------------------
 const TILEGLOBAL = 65536;
 const W = 16;
 const H = 16;
+// player spawns at tile (8,8), guard at (12,8) — keep row 8 open between them so
+// the chase has a clear lane; pillars give the raycaster some geometry to show.
 const MAP = [
   "################",
   "#..............#",
+  "#..###....###..#",
+  "#..............#",
+  "#..............#",
+  "#.....####.....#",
   "#..............#",
   "#..............#",
   "#..............#",
+  "#.....####.....#",
   "#..............#",
   "#..............#",
-  "#..............#",
-  "#..............#",
-  "#..............#",
-  "#..............#",
-  "#..............#",
-  "#..............#",
+  "#..###....###..#",
   "#..............#",
   "#..............#",
   "################",
 ];
+// flat 0/1 collision grid the raycaster marches (same blob deployed to Map.sol)
+const GRID = new Uint8Array(W * H);
+for (let y = 0; y < H; y++)
+  for (let x = 0; x < W; x++) GRID[y * W + x] = MAP[y][x] === "#" ? 1 : 0;
 
 function tilesHex(): Hex {
-  const t = new Uint8Array(W * H);
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) t[y * W + x] = MAP[y][x] === "#" ? 1 : 0;
-  return bytesToHex(t);
+  return bytesToHex(GRID);
 }
 
 async function deploy(art: any, args: any[]): Promise<Address> {
@@ -61,11 +67,14 @@ async function deploy(art: any, args: any[]): Promise<Address> {
   return r.contractAddress!;
 }
 
-// --- packed-state decoder (must match Engine.sol _pack layout) ---
+// ---------------------------------------------------------------------------
+// packed-state decoder  (must match Engine.sol _pack layout)
+// ---------------------------------------------------------------------------
 function words(hex: string): bigint[] {
   const h = hex.slice(2);
   const out: bigint[] = [];
-  for (let i = 0; i < h.length / 64; i++) out.push(BigInt("0x" + h.slice(i * 64, (i + 1) * 64)));
+  for (let i = 0; i < h.length / 64; i++)
+    out.push(BigInt("0x" + h.slice(i * 64, (i + 1) * 64)));
   return out;
 }
 const fld = (w: bigint, sh: number, bits: number) =>
@@ -79,7 +88,10 @@ function sfld(w: bigint, sh: number, bits: number): number {
 type Guard = { x: number; y: number; dir: number; state: number; hp: number };
 type State = {
   rndindex: number;
-  player: { x: number; y: number; angle: number; tilex: number; tiley: number; health: number };
+  player: {
+    x: number; y: number; angle: number; tilex: number; tiley: number;
+    health: number; ammo: number; attackcount: number;
+  };
   guards: Guard[];
 };
 
@@ -108,112 +120,493 @@ function decode(hex: string): State {
       tilex: fld(pw, 112, 8),
       tiley: fld(pw, 120, 8),
       health: sfld(pw, 128, 16),
+      ammo: sfld(pw, 144, 16),
+      attackcount: sfld(pw, 160, 16),
     },
     guards,
   };
 }
 
-// --- rendering (top-down) ---
-const canvas = document.getElementById("view") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
-const hud = document.getElementById("hud")!;
-const SC = canvas.width / W;
+// guard state IDs (gstates[] order in wl_actor.c)
+const S_STAND = 0, S_CHASE1 = 1, S_CHASE4 = 6, S_SHOOT1 = 7, S_SHOOT3 = 9;
+const S_DIE1 = 10, S_DIE4 = 13, S_PAIN = 14, S_PAIN1 = 15;
+const isChasing = (s: number) => s >= S_CHASE1 && s <= S_CHASE4;
+const isFiring = (s: number) => s >= S_SHOOT1 && s <= S_SHOOT3;
+const isDead = (s: number) => s >= S_DIE1 && s <= S_DIE4;
+const isPain = (s: number) => s === S_PAIN || s === S_PAIN1;
+function stateName(s: number): string {
+  if (s === S_STAND) return "stand";
+  if (isChasing(s)) return "chasing";
+  if (isFiring(s)) return "FIRING";
+  if (isDead(s)) return "dead";
+  if (isPain(s)) return "pain";
+  return "?";
+}
 
-function draw(s: State, tick: number) {
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  // map
+// ---------------------------------------------------------------------------
+// canvases
+// ---------------------------------------------------------------------------
+const view = document.getElementById("view") as HTMLCanvasElement;
+const vctx = view.getContext("2d")!;
+const VW = view.width, VH = view.height;
+
+const hudC = document.getElementById("hud") as HTMLCanvasElement;
+const hctx = hudC.getContext("2d")!;
+
+const mapC = document.getElementById("map") as HTMLCanvasElement;
+const mctx = mapC.getContext("2d")!;
+
+const dbg = document.getElementById("dbg")!;
+
+// ---------------------------------------------------------------------------
+// first-person raycaster
+//
+// DDA wall march transliterated from 3DSage's MIT-licensed raycaster
+// (github.com/3DSage/OpenGL-Raycaster_v1, drawRays2D). It works in "sage units"
+// where 1 tile = 64; our positions are 16.16 fixed-point, so we scale by U/TILEGLOBAL.
+// The angle convention matches ours exactly: degrees, east=0, dir=(cos a, -sin a),
+// screen-y points south — so the trig carries over unchanged.
+// ---------------------------------------------------------------------------
+const U = 64; // sage tile size
+const DR = Math.PI / 180;
+const FOV = 60;
+const PROJ = VW / 2 / Math.tan((FOV / 2) * DR); // projection-plane distance (px)
+const toU = (fp: number) => (fp / TILEGLOBAL) * U;
+const fixAng = (a: number) => ((a % 360) + 360) % 360;
+const normDeg = (a: number) => ((((a + 180) % 360) + 360) % 360) - 180;
+
+const zbuf = new Float64Array(VW); // perpendicular wall distance per column (sage units)
+
+/** Cast one ray from (px,py) at world angle `ra` (deg). Returns nearest wall hit. */
+function castRay(px: number, py: number, ra: number): { dist: number; vertical: boolean } {
+  ra = fixAng(ra);
+  const cs = Math.cos(ra * DR), sn = Math.sin(ra * DR);
+  let rx: number, ry: number, xo: number, yo: number, dof: number;
+  let disV = 1e9, disH = 1e9;
+
+  // --- vertical grid lines (x = k*U) ---
+  let Tan = Math.tan(ra * DR);
+  dof = 0;
+  if (cs > 0.001) { rx = Math.floor(px / U) * U + U; ry = (px - rx) * Tan + py; xo = U; yo = -xo * Tan; }
+  else if (cs < -0.001) { rx = Math.floor(px / U) * U - 0.0001; ry = (px - rx) * Tan + py; xo = -U; yo = -xo * Tan; }
+  else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
+  while (dof < 8) {
+    const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
+    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); }
+    else { rx += xo; ry += yo; dof++; }
+  }
+
+  // --- horizontal grid lines (y = k*U) ---
+  dof = 0;
+  Tan = 1 / Tan;
+  if (sn > 0.001) { ry = Math.floor(py / U) * U - 0.0001; rx = (py - ry) * Tan + px; yo = -U; xo = -yo * Tan; }
+  else if (sn < -0.001) { ry = Math.floor(py / U) * U + U; rx = (py - ry) * Tan + px; yo = U; xo = -yo * Tan; }
+  else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
+  while (dof < 8) {
+    const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
+    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); }
+    else { rx += xo; ry += yo; dof++; }
+  }
+
+  return disV < disH ? { dist: disV, vertical: true } : { dist: disH, vertical: false };
+}
+
+// procedural guard sprite (16x24), sampled per column with the wall z-buffer.
+// faithful to Wolf3D's scaled sprite columns; asset-free (no id artwork shipped).
+const GUARD_ART = [
+  "................",
+  ".....oooo.......",
+  "....ohhhho......",
+  "....hhhhhh......",
+  "...offffffo.....",
+  "...ofeffefo.....",
+  "...offffffo.....",
+  "....offffo......",
+  "....ouuuuo......",
+  "..oouuuuuuoo....",
+  ".ouuuuuuuuuuo...",
+  ".gouuuuuuuuuo...",
+  ".ggouuuuuuuuo...",
+  "..ouuuuuuuuo....",
+  "..ouuuuuuuuo....",
+  "..ouuuuuuuuo....",
+  "..obuuuuuubo....",
+  "..ouuuuuuuuo....",
+  "...ouuoouuo.....",
+  "...ouuoouuo.....",
+  "...ouuoouuo.....",
+  "...obboobbo.....",
+  "...obboobbo.....",
+  "................",
+];
+const TEXW = 16, TEXH = 24;
+type RGB = [number, number, number];
+
+function guardPalette(g: Guard): Record<string, RGB | null> {
+  let uni: RGB = [65, 80, 110]; // blue-gray uniform (chasing/stand)
+  if (isFiring(g.state)) uni = [92, 108, 150];
+  if (isPain(g.state)) uni = [200, 200, 210];
+  return {
+    ".": null,
+    o: [20, 17, 13],
+    h: [45, 58, 82],
+    f: [216, 168, 120],
+    e: [26, 20, 16],
+    u: uni,
+    b: [32, 24, 16],
+    g: [107, 107, 107],
+  };
+}
+
+function drawGuard(px: number, py: number, pa: number, g: Guard, clock: number) {
+  const dx = toU(g.x) - px, dy = toU(g.y) - py;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  const angTo = Math.atan2(-dy, dx) / DR; // CCW from east, y-down corrected
+  const rel = normDeg(angTo - pa);
+  if (Math.abs(rel) > FOV / 2 + 25) return; // off-screen
+  const perp = dist * Math.cos(rel * DR);
+  if (perp < 1) return;
+
+  const cx = VW / 2 - (rel / (FOV / 2)) * (VW / 2); // screen x of sprite center
+  const wallH = (U / perp) * PROJ;
+  const floorY = VH / 2 + wallH / 2; // where this depth meets the floor
+
+  // dead guard: a flat corpse mark on the floor (no standing sprite)
+  if (isDead(g.state)) {
+    const w = wallH * 0.5;
+    vctx.fillStyle = "rgba(90,20,22,0.85)";
+    vctx.beginPath();
+    vctx.ellipse(cx, floorY - wallH * 0.04, w, wallH * 0.09, 0, 0, Math.PI * 2);
+    vctx.fill();
+    return;
+  }
+
+  const spriteH = wallH * 0.86;
+  const spriteW = spriteH * (TEXW / TEXH);
+  const top = floorY - spriteH;
+  const left = cx - spriteW / 2;
+  const colW = spriteW / TEXW, rowH = spriteH / TEXH;
+  const shade = Math.max(0.28, Math.min(1, 1.15 - perp / 720));
+  const pal = guardPalette(g);
+
+  for (let tx = 0; tx < TEXW; tx++) {
+    const colX = left + tx * colW;
+    const cc = Math.floor(colX + colW / 2);
+    if (cc < 0 || cc >= VW) continue;
+    if (perp > zbuf[cc] + 0.5) continue; // occluded by a nearer wall
+    for (let ty = 0; ty < TEXH; ty++) {
+      const c = pal[GUARD_ART[ty][tx]];
+      if (!c) continue;
+      vctx.fillStyle = `rgb(${(c[0] * shade) | 0},${(c[1] * shade) | 0},${(c[2] * shade) | 0})`;
+      vctx.fillRect(Math.floor(colX), Math.floor(top + ty * rowH), Math.ceil(colW), Math.ceil(rowH));
+    }
+  }
+
+  // muzzle flash while the guard is in its shoot frames
+  if (isFiring(g.state) && (clock % 160 < 90)) {
+    const mx = left + 1.5 * colW, my = top + 11.5 * rowH;
+    vctx.fillStyle = "rgba(255,225,120,0.95)";
+    vctx.beginPath();
+    vctx.arc(mx, my, Math.max(2, spriteW * 0.12), 0, Math.PI * 2);
+    vctx.fill();
+  }
+}
+
+function renderView(s: State, clock: number, fx: Fx) {
+  const px = toU(s.player.x), py = toU(s.player.y), pa = s.player.angle;
+
+  // ceiling + floor
+  const ceil = vctx.createLinearGradient(0, 0, 0, VH / 2);
+  ceil.addColorStop(0, "#23262e");
+  ceil.addColorStop(1, "#3a4150");
+  vctx.fillStyle = ceil;
+  vctx.fillRect(0, 0, VW, VH / 2);
+  const floor = vctx.createLinearGradient(0, VH / 2, 0, VH);
+  floor.addColorStop(0, "#3a342c");
+  floor.addColorStop(1, "#15130f");
+  vctx.fillStyle = floor;
+  vctx.fillRect(0, VH / 2, VW, VH / 2);
+
+  // walls (one ray per column)
+  for (let c = 0; c < VW; c++) {
+    const ra = pa + FOV / 2 - ((c + 0.5) / VW) * FOV;
+    const hit = castRay(px, py, ra);
+    const perp = Math.max(0.0001, hit.dist * Math.cos((pa - ra) * DR)); // fisheye fix
+    zbuf[c] = perp;
+    let lineH = (U / perp) * PROJ;
+    if (lineH > VH * 3) lineH = VH * 3;
+    const top = VH / 2 - lineH / 2;
+    const shade = Math.max(0.16, Math.min(1, 1.25 - perp / 760));
+    const side = hit.vertical ? 1 : 0.74; // darken N/S faces for depth cue
+    const r = (150 * shade * side) | 0, gg = (132 * shade * side) | 0, b = (108 * shade * side) | 0;
+    vctx.fillStyle = `rgb(${r},${gg},${b})`;
+    vctx.fillRect(c, top, 1, lineH);
+  }
+
+  // guards (depth-sorted far→near so nearer overdraw wins)
+  const order = s.guards
+    .map((g) => ({ g, d: Math.hypot(toU(g.x) - px, toU(g.y) - py) }))
+    .sort((a, b) => b.d - a.d);
+  for (const { g } of order) drawGuard(px, py, pa, g, clock);
+
+  drawWeapon(clock, fx);
+
+  // damage flash
+  if (clock < fx.damageUntil) {
+    const a = 0.45 * (1 - (fx.damageUntil - clock) / 380);
+    vctx.fillStyle = `rgba(170,0,0,${Math.max(0, a)})`;
+    vctx.fillRect(0, 0, VW, VH);
+  }
+
+  if (s.player.health <= 0) {
+    vctx.fillStyle = "rgba(60,0,0,0.55)";
+    vctx.fillRect(0, 0, VW, VH);
+    vctx.fillStyle = "#f55";
+    vctx.font = "bold 48px ui-monospace, monospace";
+    vctx.textAlign = "center";
+    vctx.fillText("YOU DIED", VW / 2, VH / 2);
+    vctx.textAlign = "left";
+  }
+}
+
+// player weapon viewmodel: a pistol held in the lower-right, barrel up, viewed
+// from behind (Wolf3D/Doom convention). Tapers bottom→top so it reads as a gun,
+// not a cross. Recoil kicks it up; muzzle flash on fire.
+function drawWeapon(clock: number, fx: Fx) {
+  const recoil = clock < fx.recoilUntil ? 20 * ((fx.recoilUntil - clock) / 120) : 0;
+  const cx = VW / 2 + 40; // right of center (right hand)
+  const b = VH - recoil; // base at bottom of view (kicks up on fire)
+  const o = "#0e0e12"; // outline
+  const box = (x: number, y: number, w: number, h: number, fill: string) => {
+    vctx.fillStyle = o;
+    vctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+    vctx.fillStyle = fill;
+    vctx.fillRect(x, y, w, h);
+  };
+
+  // fist gripping (skin), runs off the bottom edge
+  box(cx - 30, b - 58, 76, 70, "#c89868");
+  vctx.fillStyle = "#a87a48"; // knuckle shading
+  for (let i = 0; i < 4; i++) vctx.fillRect(cx - 24 + i * 18, b - 58, 10, 24);
+  // grip / body of the gun (tapering tower)
+  box(cx - 22, b - 104, 60, 50, "#3a3a44");
+  box(cx - 16, b - 150, 44, 48, "#4c4c58"); // slide
+  vctx.fillStyle = "#6a6a78"; // slide highlight
+  vctx.fillRect(cx - 16, b - 150, 44, 6);
+  box(cx - 4, b - 188, 20, 40, "#2e2e38"); // barrel
+  vctx.fillStyle = "#14141a"; // muzzle hole
+  vctx.fillRect(cx, b - 188, 12, 8);
+
+  if (clock < fx.muzzleUntil) {
+    const tipX = cx + 6, tipY = b - 188;
+    vctx.fillStyle = "rgba(255,232,150,0.96)";
+    vctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const ang = (i / 10) * Math.PI * 2;
+      const rr = i % 2 ? 14 : 40;
+      vctx.lineTo(tipX + Math.cos(ang) * rr, tipY + Math.sin(ang) * rr * 0.85);
+    }
+    vctx.closePath();
+    vctx.fill();
+    vctx.fillStyle = "rgba(255,220,120,0.10)"; // muzzle light wash
+    vctx.fillRect(0, 0, VW, VH);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HUD (Wolfenstein-style status bar)
+// ---------------------------------------------------------------------------
+function cell(x: number, w: number, label: string, value: string, color: string) {
+  hctx.fillStyle = "#000";
+  hctx.fillRect(x + 4, 26, w - 8, 44);
+  hctx.fillStyle = "#7a7a82";
+  hctx.font = "10px ui-monospace, monospace";
+  hctx.textAlign = "center";
+  hctx.fillText(label, x + w / 2, 22);
+  hctx.fillStyle = color;
+  hctx.font = "bold 26px ui-monospace, monospace";
+  hctx.fillText(value, x + w / 2, 58);
+}
+
+function drawFace(cx: number, cy: number, health: number, hurt: boolean) {
+  const r = 22;
+  hctx.fillStyle = "#000";
+  hctx.fillRect(cx - r - 4, cy - r - 2, r * 2 + 8, r * 2 + 8);
+  hctx.fillStyle = health <= 0 ? "#777" : "#d8a878";
+  hctx.beginPath();
+  hctx.arc(cx, cy, r, 0, Math.PI * 2);
+  hctx.fill();
+  hctx.fillStyle = "#3a2a1a"; // hair
+  hctx.fillRect(cx - r, cy - r, r * 2, 8);
+  hctx.fillStyle = "#111"; // eyes
+  const eo = hurt ? 1 : 0;
+  hctx.fillRect(cx - 11, cy - 4 + eo, 6, 5);
+  hctx.fillRect(cx + 5, cy - 4 + eo, 6, 5);
+  // mouth by health
+  hctx.strokeStyle = "#5a1010";
+  hctx.lineWidth = 2;
+  hctx.beginPath();
+  if (health <= 0) { hctx.moveTo(cx - 8, cy + 12); hctx.lineTo(cx + 8, cy + 12); } // flat dead
+  else if (health < 35) { hctx.arc(cx, cy + 16, 6, Math.PI, 0); } // frown
+  else if (health < 75) { hctx.moveTo(cx - 7, cy + 11); hctx.lineTo(cx + 7, cy + 11); }
+  else { hctx.arc(cx, cy + 8, 6, 0, Math.PI); } // smile
+  hctx.stroke();
+}
+
+function renderHud(s: State, gas: number | null, clock: number, fx: Fx) {
+  hctx.fillStyle = "#3c3c42";
+  hctx.fillRect(0, 0, hudC.width, hudC.height);
+  hctx.fillStyle = "#2a2a30";
+  hctx.fillRect(0, 0, hudC.width, 6);
+
+  const hp = Math.max(0, s.player.health);
+  const hpColor = hp <= 0 ? "#f33" : hp < 35 ? "#f73" : hp < 75 ? "#fd6" : "#6f6";
+  cell(0, 120, "FLOOR", "1", "#9cf");
+  cell(120, 130, "HEALTH", hp + "%", hpColor);
+  drawFace(295, 42, hp, clock < fx.damageUntil);
+  cell(330, 120, "AMMO", String(Math.max(0, s.player.ammo)), s.player.ammo > 0 ? "#fd6" : "#f55");
+  cell(450, 190, "GAS / INPUT", gas != null ? (gas / 1000).toFixed(1) + "k" : "—", "#6cf");
+}
+
+// ---------------------------------------------------------------------------
+// minimap (top-down)
+// ---------------------------------------------------------------------------
+function renderMap(s: State) {
+  const SC = mapC.width / W;
+  mctx.fillStyle = "#000";
+  mctx.fillRect(0, 0, mapC.width, mapC.height);
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
-      ctx.fillStyle = MAP[y][x] === "#" ? "#334" : "#0a0a12";
-      ctx.fillRect(x * SC, y * SC, SC - 1, SC - 1);
+      mctx.fillStyle = GRID[y * W + x] ? "#3a3a4a" : "#0c0c14";
+      mctx.fillRect(x * SC, y * SC, SC - 1, SC - 1);
     }
-  // guards
-  for (const g of s.guards) {
-    const gx = (g.x / TILEGLOBAL) * SC;
-    const gy = (g.y / TILEGLOBAL) * SC;
-    const shooting = g.state >= 7 && g.state <= 9;
-    ctx.fillStyle = shooting ? "#f33" : "#f93";
-    ctx.beginPath();
-    ctx.arc(gx, gy, SC * 0.32, 0, Math.PI * 2);
-    ctx.fill();
+  const px = (s.player.x / TILEGLOBAL) * SC, py = (s.player.y / TILEGLOBAL) * SC;
+  // fov cone
+  const pa = s.player.angle;
+  mctx.fillStyle = "rgba(110,200,255,0.12)";
+  mctx.beginPath();
+  mctx.moveTo(px, py);
+  for (let d = -FOV / 2; d <= FOV / 2; d += 6) {
+    const a = (pa + d) * DR;
+    mctx.lineTo(px + Math.cos(a) * SC * 6, py - Math.sin(a) * SC * 6);
   }
-  // player + facing
-  const px = (s.player.x / TILEGLOBAL) * SC;
-  const py = (s.player.y / TILEGLOBAL) * SC;
-  const a = (s.player.angle * Math.PI) / 180;
-  ctx.strokeStyle = "#6cf";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(px, py);
-  ctx.lineTo(px + Math.cos(a) * SC * 0.7, py - Math.sin(a) * SC * 0.7);
-  ctx.stroke();
-  ctx.fillStyle = "#6cf";
-  ctx.beginPath();
-  ctx.arc(px, py, SC * 0.28, 0, Math.PI * 2);
-  ctx.fill();
+  mctx.closePath();
+  mctx.fill();
+  for (const g of s.guards) {
+    const gx = (g.x / TILEGLOBAL) * SC, gy = (g.y / TILEGLOBAL) * SC;
+    mctx.fillStyle = isDead(g.state) ? "#633" : isFiring(g.state) ? "#f33" : "#f93";
+    mctx.beginPath();
+    mctx.arc(gx, gy, SC * 0.32, 0, Math.PI * 2);
+    mctx.fill();
+  }
+  mctx.fillStyle = "#6cf";
+  mctx.beginPath();
+  mctx.arc(px, py, SC * 0.3, 0, Math.PI * 2);
+  mctx.fill();
+}
 
+function renderDbg(s: State, tick: number, gas: number | null) {
   const g0 = s.guards[0];
-  hud.textContent =
+  dbg.textContent =
     `tick      ${tick}\n` +
+    `gas/input ${gas != null ? gas.toLocaleString() : "—"}\n` +
     `rndindex  ${s.rndindex}\n\n` +
-    `player\n  health  ${s.player.health}\n  tile    (${s.player.tilex},${s.player.tiley})\n  angle   ${s.player.angle}\n\n` +
+    `player\n` +
+    `  health  ${s.player.health}\n` +
+    `  ammo    ${s.player.ammo}\n` +
+    `  tile    (${s.player.tilex},${s.player.tiley})\n` +
+    `  angle   ${s.player.angle}\n\n` +
     (g0
       ? `guard\n  state   ${g0.state} ${stateName(g0.state)}\n  hp      ${g0.hp}\n  dir     ${g0.dir}`
-      : "");
+      : "no guards");
 }
 
-function stateName(s: number): string {
-  if (s === 0) return "(stand)";
-  if (s >= 1 && s <= 6) return "(chasing)";
-  if (s >= 7 && s <= 9) return "FIRING";
-  return "";
-}
+// ---------------------------------------------------------------------------
+// fx timers (driven on the render clock, independent of tx latency)
+// ---------------------------------------------------------------------------
+type Fx = { muzzleUntil: number; recoilUntil: number; damageUntil: number };
+const fx: Fx = { muzzleUntil: 0, recoilUntil: 0, damageUntil: 0 };
 
-// --- input ---
+// ---------------------------------------------------------------------------
+// input
+// ---------------------------------------------------------------------------
 const keys = new Set<string>();
-addEventListener("keydown", (e) => keys.add(e.key.toLowerCase()));
+addEventListener("keydown", (e) => {
+  keys.add(e.key.toLowerCase());
+  if ([" ", "arrowleft", "arrowright", "arrowup", "arrowdown"].includes(e.key.toLowerCase()))
+    e.preventDefault();
+});
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
 function cmd() {
-  let controlx = 0,
-    controly = 0,
-    buttons = 0;
-  if (keys.has("w")) controly = -35;
-  if (keys.has("s")) controly = 35;
-  if (keys.has("a")) controlx = 35;
-  if (keys.has("d")) controlx = -35;
-  if (keys.has("shift")) buttons |= 2; // strafe
-  if (keys.has(" ")) buttons |= 1; // attack (no effect until M2c part 2)
+  let controlx = 0, controly = 0, buttons = 0;
+  const strafe = keys.has("shift");
+  if (keys.has("w") || keys.has("arrowup")) controly = -35;
+  if (keys.has("s") || keys.has("arrowdown")) controly = 35;
+  // a/d turn normally, strafe with Shift; arrows always turn
+  if (keys.has("a") || (strafe && keys.has("arrowleft"))) controlx = 35;
+  if (keys.has("d") || (strafe && keys.has("arrowright"))) controlx = -35;
+  if (!strafe && keys.has("arrowleft")) controlx = 35;
+  if (!strafe && keys.has("arrowright")) controlx = -35;
+  if (strafe) buttons |= 2; // BT_STRAFE
+  if (keys.has(" ")) buttons |= 1; // BT_ATTACK
   return { controlx: BigInt(controlx), controly: BigInt(controly), buttons };
 }
 
+// ---------------------------------------------------------------------------
+// main: deploy, then a render loop (rAF) + a tx loop (drives the sim)
+// ---------------------------------------------------------------------------
+let latest: State | null = null;
+let tick = 0;
+let lastGas: number | null = null;
+
 async function main() {
-  hud.textContent = "deploying Engine / Map / Session to anvil…";
+  dbg.textContent = "deploying Engine / Map / Session to anvil…";
   const engine = await deploy(EngineA, []);
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(), 8n, 8n, 1n, "0x0c0804" as Hex, // guard at tile (12,8) dir west
   ]);
   const session = await deploy(SessionA, [engine, map]);
 
-  // drive the sim continuously so the guard chases even while you stand still
-  let tick = 0;
+  latest = decode(
+    (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex,
+  );
+
+  // render loop — smooth fx (gun/muzzle/flash) regardless of tx cadence
+  function frame() {
+    const clock = performance.now();
+    if (latest) {
+      renderView(latest, clock, fx);
+      renderHud(latest, lastGas, clock, fx);
+      renderMap(latest);
+      renderDbg(latest, tick, lastGas);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // tx loop — one submitInput per step; world only advances when we act
   for (;;) {
+    const before = latest!;
     const hash = await wallet.writeContract({
       address: session,
       abi: SessionA.abi,
       functionName: "submitInput",
       args: [cmd()],
     });
-    await pub.waitForTransactionReceipt({ hash });
-    const state = (await pub.readContract({
-      address: session,
-      abi: SessionA.abi,
-      functionName: "getState",
-    })) as Hex;
-    draw(decode(state), ++tick);
-    await new Promise((r) => setTimeout(r, 90));
+    const receipt = await pub.waitForTransactionReceipt({ hash });
+    lastGas = Number(receipt.gasUsed);
+    const after = decode(
+      (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex,
+    );
+    const now = performance.now();
+    if (after.player.ammo < before.player.ammo) { fx.muzzleUntil = now + 90; fx.recoilUntil = now + 110; }
+    if (after.player.health < before.player.health) fx.damageUntil = now + 380;
+    latest = after;
+    tick++;
+    await new Promise((r) => setTimeout(r, 70));
   }
 }
 
-main().catch((e) => (hud.textContent = "error: " + (e?.message ?? e)));
+main().catch((e) => (dbg.textContent = "error: " + (e?.message ?? e)));

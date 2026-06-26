@@ -16,8 +16,11 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 - **Two-way combat** — the guard shoots the player (`T_Shoot` → `TakeDamage`, health drops); the
   player fires back (`GunAttack` → `DamageActor` → pain → `KillActor` death), with ammo + a fire
   cooldown.
-- **A live browser view** — a TypeScript/viem top-down client that deploys to anvil, drives the
-  sim one `submitInput` tx per frame, and renders the decoded on-chain state. WASD moves; space fires.
+- **A live first-person browser view** — a TypeScript/viem client that deploys to anvil, drives the
+  sim one `submitInput` tx per step, and renders the decoded on-chain state: a raycaster wall view
+  (DDA adapted from 3DSage's MIT raycaster), guards as depth-buffered sprite columns, a pistol
+  viewmodel + muzzle/damage flashes, a Wolfenstein-style HUD (health/ammo/face + live gas/input),
+  and a minimap. WASD/arrows move, Shift strafes, Space fires. No game logic client-side; no id art.
 
 ## Milestones
 

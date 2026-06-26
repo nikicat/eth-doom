@@ -25,7 +25,7 @@ VGAHEAD*
 
 # verification artifacts
 /.playwright-mcp/
-/ethdoom-live.png
+/ethdoom-*.png
 
 # editor / os
 .DS_Store

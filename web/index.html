@@ -5,23 +5,37 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>eth-doom — on-chain Wolf3D</title>
     <style>
-      body { margin: 0; background: #111; color: #cdd; font: 14px ui-monospace, monospace; }
-      .wrap { display: flex; gap: 16px; padding: 16px; flex-wrap: wrap; }
-      canvas { background: #000; image-rendering: pixelated; border: 1px solid #333; }
-      #hud { white-space: pre; line-height: 1.5; }
-      h1 { font-size: 16px; margin: 8px 16px; color: #6cf; }
-      b { color: #fd6; }
+      body { margin: 0; background: #0c0c0e; color: #cdd; font: 13px ui-monospace, monospace; }
+      h1 { font-size: 15px; margin: 10px 16px 6px; color: #6cf; font-weight: 600; }
+      .wrap { display: flex; gap: 16px; padding: 12px 16px; flex-wrap: wrap; align-items: flex-start; }
+      .game { display: flex; flex-direction: column; gap: 0; }
+      canvas { image-rendering: pixelated; display: block; }
+      #view { border: 1px solid #000; background: #000; }
+      #hud { border: 1px solid #000; border-top: none; }
+      .side { display: flex; flex-direction: column; gap: 10px; }
+      #map { border: 1px solid #333; background: #000; }
+      #dbg { white-space: pre; line-height: 1.5; margin: 0; color: #9ab; }
+      .hint { margin: 4px 16px 14px; color: #667; }
+      b { color: #fd6; } kbd { color: #9cf; }
     </style>
   </head>
   <body>
-    <h1>eth-doom — Wolfenstein world simulation running on the EVM (anvil)</h1>
+    <h1>eth-doom — a Wolfenstein world simulation running on the EVM (anvil)</h1>
     <div class="wrap">
-      <canvas id="view" width="448" height="448"></canvas>
-      <div id="hud">booting…</div>
+      <div class="game">
+        <canvas id="view" width="640" height="400"></canvas>
+        <canvas id="hud" width="640" height="84"></canvas>
+      </div>
+      <div class="side">
+        <canvas id="map" width="200" height="200"></canvas>
+        <pre id="dbg">booting…</pre>
+      </div>
     </div>
-    <p style="margin:8px 16px;color:#789">
-      WASD to move · the <b style="color:#f55">guard</b> chases and shoots you · every frame is one
-      <code>submitInput</code> tx; the view is decoded from the contract's <code>getState()</code>.
+    <p class="hint">
+      <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>←</kbd>/<kbd>→</kbd> or
+      <kbd>A</kbd>/<kbd>D</kbd> turn · hold <kbd>Shift</kbd> to strafe · <kbd>Space</kbd> fire.
+      Each frame is one <code>submitInput</code> tx; the entire view is decoded from the contract's
+      <code>getState()</code>. First-person view: DDA raycaster adapted from 3DSage's MIT raycaster.
     </p>
     <script type="module" src="/src/main.ts"></script>
   </body>

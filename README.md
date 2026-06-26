@@ -6,7 +6,8 @@ lockstep netcode). Rendering and audio stay off-chain.
 
 **Working today:** a guard chases you, shoots you, and you can shoot it dead — a full PvE loop
 simulated entirely in a Solidity contract, **verified bit-for-bit against the original id C code**,
-at ~80–126k gas per input, with a live top-down browser view.
+at ~80–126k gas per input, with a live **first-person** browser view (raycaster + HUD + minimap),
+all decoded from on-chain state.
 
 - **[docs/STATUS.md](docs/STATUS.md)** — milestones, what runs, gas numbers, how to run it.
 - **[docs/DESIGN.md](docs/DESIGN.md)** — architecture, the differential-testing method, state
@@ -16,7 +17,8 @@ at ~80–126k gas per input, with a live top-down browser view.
 
 ```
 docs/        STATUS.md · DESIGN.md
-reference/   cloned wolf3d + sage-raycaster (read-only; not committed — see below)
+reference/   cloned wolf3d + sage-raycaster (read-only; not committed — see below;
+             the client's DDA wall march is adapted from sage-raycaster, MIT)
 oracle/      carved C sim → headless sim_oracle (differential ground truth)
 contracts/   Foundry: Engine / Map / Session + Fixed/Trig/Rng libs (Solidity)
 rust/        cargo workspace: harness (differential + gas) · map-extract · client-core (stubs)
