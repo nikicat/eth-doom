@@ -1,0 +1,28 @@
+# third-party reference clones (id Software Wolf3D source is non-free — do NOT
+# redistribute; re-create with the clone commands in reference/README.md)
+/reference/
+
+# build artifacts
+/contracts/out/
+/contracts/cache/
+/contracts/broadcast/
+target/
+node_modules/
+/web/dist/
+/oracle/build/
+*.wasm
+
+# id Software shareware assets — DO NOT COMMIT (read from a user-provided dir)
+/assets/
+*.WL1
+*.wl1
+GAMEMAPS*
+MAPHEAD*
+VSWAP*
+VGAGRAPH*
+VGADICT*
+VGAHEAD*
+
+# editor / os
+.DS_Store
+*.swp

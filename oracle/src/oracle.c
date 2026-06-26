@@ -1,0 +1,78 @@
+/* sim_oracle — headless Wolfenstein-3D world simulation (movement subset).
+ *
+ * Usage:  sim_oracle <map.txt> <input.txt> <spawnx> <spawny> <spawndir>
+ *
+ *   map.txt    line 1 "W H", then H rows of W chars ('#' = wall, else floor)
+ *   input.txt  one tic per line: "controlx controly buttons" ('#' comment / blank ok)
+ *
+ * Emits JSONL to stdout: one snapshot for tic 0 (post-spawn) then one per input
+ * tic. These are the golden vectors the Solidity Engine is diffed against.
+ */
+#include "wl_sim.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void emit(long tick)
+{
+    printf("{\"tick\":%ld,\"x\":%ld,\"y\":%ld,\"angle\":%d,"
+           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d}\n",
+           tick, (long)player->x, (long)player->y, player->angle,
+           player->tilex, player->tiley, anglefrac);
+}
+
+static void load_map(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    int w, h, x, y;
+    char line[256];
+
+    if (!f) { perror(path); exit(1); }
+    if (fscanf(f, "%d %d\n", &w, &h) != 2 || w > MAPSIZE || h > MAPSIZE) {
+        fprintf(stderr, "bad map header\n"); exit(1);
+    }
+    for (y = 0; y < h; y++) {
+        if (!fgets(line, sizeof line, f)) { fprintf(stderr, "map too short\n"); exit(1); }
+        for (x = 0; x < w; x++)
+            tilemap[x][y] = (line[x] == '#') ? 1 : 0;
+    }
+    fclose(f);
+}
+
+int main(int argc, char **argv)
+{
+    FILE *f;
+    char  line[256];
+    long  tick = 0;
+
+    if (argc != 6) {
+        fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir>\n", argv[0]);
+        return 1;
+    }
+
+    BuildTables();
+    load_map(argv[1]);
+    SpawnPlayer(atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
+    emit(tick); /* tic 0: initial state */
+
+    f = fopen(argv[2], "r");
+    if (!f) { perror(argv[2]); return 1; }
+    while (fgets(line, sizeof line, f)) {
+        int cx, cy, btns;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+        if (sscanf(p, "%d %d %d", &cx, &cy, &btns) != 3) continue;
+
+        controlx = cx;
+        controly = cy;
+        memset(buttonstate, 0, sizeof buttonstate);
+        for (int b = 0; b < NUMBUTTONS; b++)
+            buttonstate[b] = (btns >> b) & 1;
+
+        ControlMovement(player);
+        emit(++tick);
+    }
+    fclose(f);
+    return 0;
+}

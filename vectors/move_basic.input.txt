@@ -1,0 +1,12 @@
+# controlx controly buttons   (buttons bitmask: bt_strafe=2)
+# spawn: tile (8,8) dir 1 -> angle 0 (faces +x / east)
+0 -35 0
+0 -35 0
+0 -35 0
+70 0 0
+70 0 0
+0 -70 0
+0 -70 0
+-35 0 2
+-35 0 2
+0 35 0
