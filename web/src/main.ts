@@ -20,7 +20,8 @@ const account = privateKeyToAccount(
 );
 const transport = http("http://127.0.0.1:8545");
 const wallet = createWalletClient({ account, chain: foundry, transport });
-const pub = createPublicClient({ chain: foundry, transport });
+// low pollingInterval so waitForTransactionReceipt returns fast on anvil (instant mining)
+const pub = createPublicClient({ chain: foundry, transport, pollingInterval: 20 });
 
 // ---------------------------------------------------------------------------
 // World / map  (positions are 16.16 fixed-point; 1 tile = TILEGLOBAL)
@@ -718,8 +719,9 @@ function renderHudReal(s: State, A: Assets, clock: number) {
       x++;
     }
   };
-  num(1, 2, 2);                              // LEVEL  (floor 1)
-  num(tick, 6, 6);                           // SCORE  (inputs submitted on-chain)
+  const kills = s.guards.filter((g) => isDead(g.state)).length;
+  num(1, 2, 2);                              // LEVEL (floor 1)
+  num(kills * 100, 6, 6);                    // SCORE (100 pts per guard killed)
   num(1, 14, 1);                             // LIVES
   num(s.player.health, 21, 3);               // HEALTH
   num(s.player.ammo, 27, 2);                 // AMMO
@@ -806,17 +808,25 @@ addEventListener("keydown", (e) => {
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
+const MOVE = 35; // forward/back/strafe input (≈ max thrust after MOVESCALE)
+const TURN = 200; // turn input; engine turns angleunits = controlx/ANGLESCALE(20) per tick
 function cmd() {
   let controlx = 0, controly = 0, buttons = 0;
   const strafe = keys.has("shift");
-  if (keys.has("w") || keys.has("arrowup")) controly = -35;
-  if (keys.has("s") || keys.has("arrowdown")) controly = 35;
-  // a/d turn normally, strafe with Shift; arrows always turn
-  if (keys.has("a") || (strafe && keys.has("arrowleft"))) controlx = 35;
-  if (keys.has("d") || (strafe && keys.has("arrowright"))) controlx = -35;
-  if (!strafe && keys.has("arrowleft")) controlx = 35;
-  if (!strafe && keys.has("arrowright")) controlx = -35;
-  if (strafe) buttons |= 2; // BT_STRAFE
+  const left = keys.has("a") || keys.has("arrowleft");
+  const right = keys.has("d") || keys.has("arrowright");
+  if (keys.has("w") || keys.has("arrowup")) controly = -MOVE;
+  if (keys.has("s") || keys.has("arrowdown")) controly = MOVE;
+  if (strafe) {
+    // strafe: +controlx → right (engine thrusts toward angle-90), -controlx → left
+    if (left) controlx = -MOVE;
+    if (right) controlx = MOVE;
+    buttons |= 2; // BT_STRAFE
+  } else {
+    // turn: engine does angle -= controlx/ANGLESCALE, so +controlx = right, - = left
+    if (left) controlx = -TURN;
+    if (right) controlx = TURN;
+  }
   if (keys.has(" ")) buttons |= 1; // BT_ATTACK
   return { controlx: BigInt(controlx), controly: BigInt(controly), buttons };
 }
@@ -878,7 +888,7 @@ async function main() {
     if (after.player.health < before.player.health) fx.damageUntil = now + 380;
     latest = after;
     tick++;
-    await new Promise((r) => setTimeout(r, 70));
+    await new Promise((r) => setTimeout(r, 16));
   }
 }
 
