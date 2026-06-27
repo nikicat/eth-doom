@@ -56,7 +56,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
 | **M3** world completeness | ✅ | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (4-shot burst, 100 HP) ✅; **dog** (melee, 1 HP) ✅; **officer** (speed ×5, 50 HP) ✅ — full E1 roster; **`SessionFactory`** (many games, one engine/map) ✅ |
-| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; next: `Deploy.s.sol`, web burner/auto-sign UX, MegaETH deploy (needs RPC + funded key), WASM Wolf3D-port renderer + client prediction |
+| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; next: web burner/auto-sign UX, MegaETH deploy (needs RPC + funded key), WASM Wolf3D-port renderer + client prediction |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
 
@@ -110,6 +110,10 @@ multi-guard, SS, dog, and officer scenarios). All ten scenarios pass.
 # live view:
 anvil --silent &
 ( cd web && pnpm install && pnpm dev )      # http://localhost:5173
+# deploy the whole stack (Engine + SessionFactory + Map + owned Session) to any chain:
+( cd contracts && forge script script/Deploy.s.sol --rpc-url $RPC --private-key $KEY --broadcast )
+#   default: a self-contained test room. Real level: prepend MAP_JSON=../web/public/level.json
+#   (regenerate it first with `cargo run -p map-extract`, which now also emits *Hex fields).
 ```
 
 ## Next

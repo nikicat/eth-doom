@@ -32,7 +32,10 @@ Session  per-game packed world state                    raycaster view       gol
   items are in storage (moving doors/items to SSTORE2 is the next gas lever).
 - **`Session`** (stateful) — the single source of truth for a live game: holds the packed world
   state + immutable `engine`/`map` addresses. `engine`/`map` are immutable so a live game's rules can
-  never change underneath it.
+  never change underneath it. An immutable `owner` may `delegate(sessionKey, expiry)` a time-boxed
+  ephemeral burner key (one signature) that then auto-signs every `submitInput` — popup-free play, no
+  wallet prompt per tick. `owner == address(0)` is an **open** session (anyone may submit), which the
+  differential harness and PoC use (one dev key both deploys and plays).
 - **`SessionFactory`** — `createSession(engine, map)` deploys + records a `Session`, so many concurrent
   matches share one engine and one map deployment and clients/indexers discover live games from its
   events. Full deploys, not EIP-1167 clones: a clone can't use `immutable`, so it would read

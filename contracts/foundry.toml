@@ -6,10 +6,12 @@ optimizer = true
 optimizer_runs = 200
 via_ir = true
 evm_version = "cancun"
-# Allow tests/scripts to read committed map blobs and golden vectors.
+# Allow tests/scripts to read committed map blobs and golden vectors, plus the
+# extracted level.json (map-extract output) that Deploy.s.sol reads via MAP_JSON.
 fs_permissions = [
     { access = "read", path = "../vectors" },
     { access = "read", path = "../oracle/maps" },
+    { access = "read", path = "../web/public" },
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
