@@ -40,6 +40,7 @@ let spawnTile = { x: 8, y: 8, dir: 1 }; // engine dir: angle = (1-dir)*90 ; 1 = 
 let guardTiles: number[][] = [[12, 8]];
 let doorList: number[][] = []; // [tilex, tiley, vertical|lock<<1] in doornum order
 let itemList: number[][] = []; // [tilex, tiley, itemnumber] bonus items
+let sceneryList: number[][] = []; // [tilex, tiley, spriteIndex] decorative statics (render-only, off-chain)
 let areaMap: number[] = []; // per-tile area number (row-major); empty => single area
 let levelName = "test room";
 
@@ -62,6 +63,7 @@ function initTestRoom() {
   tiles = new Uint16Array(W * H);
   doorList = [];
   itemList = [];
+  sceneryList = []; // the synthetic test room has no scenery
   let doornum = 0;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
@@ -92,6 +94,7 @@ async function loadLevel(): Promise<boolean> {
     levelName = L.name ?? "level";
     doorList = (L.doors as number[][] | undefined) ?? [];
     itemList = (L.items as number[][] | undefined) ?? [];
+    sceneryList = (L.scenery as number[][] | undefined) ?? []; // decorative statics (render-only)
     areaMap = (L.areas as number[] | undefined) ?? []; // per-tile area numbers (sound localization)
     guardTiles = (L.guards as number[][])
       .map(([x, y, dir, cls]) => ({ x, y, dir: dir ?? 0, cls: cls ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
@@ -588,6 +591,7 @@ async function loadAssets(): Promise<Assets | null> {
     for (const d of f.die) need.push(d);
     need.push(f.dead);
   }
+  for (const [, , spr] of sceneryList) need.push(spr); // decorative static sprites (SPR_STAT_*)
   const uniq = [...new Set(need)];
   const loaded = await Promise.all(uniq.map((i) => loadImg64(`/wolf/sprite_${p3(i)}.png`)));
   uniq.forEach((i, k) => { if (loaded[k]) sprites.set(i, loaded[k]!); });
@@ -797,6 +801,38 @@ function drawItems(px: number, py: number, pa: number, s: State) {
   }
 }
 
+// decorative static scenery (lamps, pillars, plants, tables, skeletons…) as real Wolf3D
+// billboards. The full 64×64 sprite fills the tile cube — so a ceiling light rides the
+// ceiling and a floor object the floor, via the sprite's own transparency — depth-tested
+// per column against the walls. Render-only: these statics have no sim effect (blocking
+// collision is M6) and never reach the contract.
+function drawScenery(px: number, py: number, pa: number, A: Assets) {
+  for (const [tx, ty, spr] of sceneryList) {
+    const img = A.sprites.get(spr);
+    if (!img) continue;
+    const dx = (tx + 0.5) * U - px, dy = (ty + 0.5) * U - py;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1) continue;
+    const rel = normDeg(Math.atan2(-dy, dx) / DR - pa);
+    if (Math.abs(rel) > FOV / 2 + 30) continue;
+    const perp = dist * Math.cos(rel * DR);
+    if (perp < 1) continue;
+    const cx = VW / 2 - (rel / (FOV / 2)) * (VW / 2);
+    const wallH = (U / perp) * PROJ;
+    const floorY = VH / 2 + wallH / 2;
+    const sprH = wallH, sprW = wallH; // 64×64 sprite fills the tile cube
+    const top = floorY - sprH, left = cx - sprW / 2;
+    const x0 = Math.max(0, Math.floor(left)), x1 = Math.min(VW - 1, Math.ceil(left + sprW));
+    for (let xs = x0; xs <= x1; xs++) {
+      if (perp > zbuf[xs] + 0.5) continue; // occluded by a nearer wall
+      const u = (xs - left) / sprW;
+      if (u < 0 || u >= 1) continue;
+      const sx = Math.min(63, Math.floor(u * 64));
+      vctx.drawImage(img, sx, 0, 1, 64, xs, top, 1, sprH);
+    }
+  }
+}
+
 function renderView(s: State, clock: number, fx: Fx) {
   const px = toU(s.player.x), py = toU(s.player.y), pa = s.player.angle;
 
@@ -810,7 +846,8 @@ function renderView(s: State, clock: number, fx: Fx) {
     wall.render(px, py, pa, s.doors);
   } else renderWallsTS(px, py, pa);
 
-  // bonus items (floor markers) then guards on top
+  // decorative scenery (real static billboards) behind items/guards, then items, then guards
+  if (assets) drawScenery(px, py, pa, assets);
   drawItems(px, py, pa, s);
 
   // guards (depth-sorted far→near so nearer overdraw wins)

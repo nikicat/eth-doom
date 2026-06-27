@@ -152,6 +152,23 @@ fn bonus_item(t: u16) -> Option<u8> {
     STATINFO_BO.get(idx).copied().filter(|&bo| bo != 0)
 }
 
+/// Decorative (non-bonus) scenery static: lamps, pillars, tables, plants, skeletons…
+/// (M5.4). A plane-1 static (code 23..=70 → statinfo index 0..47) whose bonus is 0.
+/// Returns the **VSWAP sprite index** = SPR_STAT_0 (=2) + statindex, which the client
+/// billboards. Render-only — scenery has no sim effect (blocking collision is M6), so it
+/// never reaches the contract. The idx<48 bound keeps non-statics (patrol turn points
+/// 90..97, pushwalls) out, since they fall outside the shareware's 48 statics.
+fn decoration_static(t: u16) -> Option<u8> {
+    if t < 23 {
+        return None;
+    }
+    let idx = (t - 23) as usize;
+    if idx >= 48 || STATINFO_BO[idx] != 0 {
+        return None; // not a static, or it's a bonus pickup (handled by bonus_item)
+    }
+    Some((2 + idx) as u8) // sprite index: SPR_DEMO=0, SPR_DEATHCAM=1, SPR_STAT_0=2
+}
+
 const AREATILE: u16 = 107;
 const AMBUSHTILE: u16 = 106;
 
@@ -225,6 +242,7 @@ fn main() -> Result<()> {
     let mut spawn = None;
     let mut guards: Vec<[u8; 4]> = Vec::new();
     let mut items: Vec<[u8; 3]> = Vec::new();
+    let mut scenery: Vec<[u8; 3]> = Vec::new();
     for y in 0..h {
         for x in 0..w {
             let t = plane1[y * w + x];
@@ -234,6 +252,8 @@ fn main() -> Result<()> {
                 guards.push([x as u8, y as u8, dir, cls]); // tilex, tiley, dir, class
             } else if let Some(bo) = bonus_item(t) {
                 items.push([x as u8, y as u8, bo]); // tilex, tiley, itemnumber
+            } else if let Some(spr) = decoration_static(t) {
+                scenery.push([x as u8, y as u8, spr]); // tilex, tiley, VSWAP sprite index
             }
         }
     }
@@ -283,6 +303,7 @@ fn main() -> Result<()> {
         "guards": guards,           // [tilex, tiley, dir, class] per enemy (0 guard, 2 SS, 1/3 -> guard)
         "doors": doors,             // [tilex, tiley, vertical|lock<<1] per door, in doornum order
         "items": items,             // [tilex, tiley, itemnumber] per bonus item
+        "scenery": scenery,         // [tilex, tiley, sprite] decorative statics (client billboards; off-chain)
         "areas": areas,             // per-tile area number (sound localization via ConnectAreas)
         // flat-bytes mirror of the arrays above, for script/Deploy.s.sol:
         "tilesHex": to_hex(&tiles),
@@ -296,10 +317,11 @@ fn main() -> Result<()> {
     }
     fs::write(&args.out, serde_json::to_vec_pretty(&level)?)?;
     println!(
-        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors, {} items -> {}",
+        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors, {} items, {} scenery -> {}",
         guards.len(),
         doors.len(),
         items.len(),
+        scenery.len(),
         args.out.display()
     );
     Ok(())
