@@ -31,9 +31,7 @@ ROOT="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 # redistribute. If you legitimately own it, point --zip at your own copy — the
 # extractor reads VSWAP.WL6 the same way — but this script will not fetch it.
 CANDIDATE_URLS=(
-  "https://archive.org/download/1wolf14/1wolf14.zip"
-  "https://archive.org/download/Wolfenstein3dV1.4Shareware/1wolf14.zip"
-  "https://archive.org/download/wolf3d_shareware/1wolf14.zip"
+  "https://archive.org/download/Wolfenstein3-DVersion1.1Shareware/Wolfenstein3D.zip"
 )
 
 OUT="${OUT:-$ROOT/assets/wl1}"
