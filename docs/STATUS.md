@@ -56,22 +56,22 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
 | **M3** world completeness | ✅ | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (4-shot burst, 100 HP) ✅; **dog** (melee, 1 HP) ✅; **officer** (speed ×5, 50 HP) ✅ — full E1 roster; **`SessionFactory`** (many games, one engine/map) ✅ |
-| **M4** MegaETH + UX | ⬜ | deploy to MegaETH; session-key delegation + auto-signing; WASM Wolf3D-port renderer; client prediction |
+| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; next: `Deploy.s.sol`, web burner/auto-sign UX, MegaETH deploy (needs RPC + funded key), WASM Wolf3D-port renderer + client prediction |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
 
 | scenario | what | min | avg | max |
 |---|---|---|---|---|
-| `move_basic` | movement only | 60.3k | 65.1k | 80.6k |
-| `chase_guard` | guard chases + shoots you (151 tics) | 66.9k | 72.3k | 92.3k |
-| `kill_guard` | you fire + kill the guard (81 tics) | 67.1k | 70.0k | 100.4k |
-| `door_use` | walk up to a door, Use it, pass through (151 tics) | 71.4k | 77.6k | 118.0k |
-| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 74.3k | 81.6k | 108.8k |
-| `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 89.7k | 97.0k | 124.2k |
-| `two_guards` | two guards chase; the rear can't walk through the front (141 tics) | 81.8k | 96.3k | 119.6k |
-| `kill_ss` | an SS (100 HP, 4-shot burst) chases, fires, and dies (221 tics) | 70.2k | 77.2k | 106.3k |
-| `dog_bite` | a dog (1 HP, fast, melee) rushes the player and leaps to bite (261 tics) | 73.2k | 75.6k | 101.8k |
-| `kill_officer` | an officer (50 HP, speed ×5, constant reaction) chases, fires, dies (171 tics) | 70.9k | 80.2k | 107.0k |
+| `move_basic` | movement only | 66.0k | 70.7k | 86.2k |
+| `chase_guard` | guard chases + shoots you (151 tics) | 72.6k | 78.0k | 98.1k |
+| `kill_guard` | you fire + kill the guard (81 tics) | 72.8k | 75.7k | 106.3k |
+| `door_use` | walk up to a door, Use it, pass through (151 tics) | 71.7k | 77.8k | 118.2k |
+| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 74.5k | 81.8k | 109.1k |
+| `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 82.5k | 90.1k | 117.9k |
+| `two_guards` | two guards chase; the rear can't walk through the front (141 tics) | 82.0k | 96.5k | 120.1k |
+| `kill_ss` | an SS (100 HP, 4-shot burst) chases, fires, and dies (221 tics) | 70.4k | 77.4k | 106.6k |
+| `dog_bite` | a dog (1 HP, fast, melee) rushes the player and leaps to bite (261 tics) | 73.4k | 75.8k | 102.0k |
+| `kill_officer` | an officer (50 HP, speed ×5, constant reaction) chases, fires, dies (171 tics) | 71.1k | 80.4k | 107.2k |
 
 `submitInput` gas is the true per-input cost a player pays — ~65–125k with a live guard + door + items
 on the 16×16 test map, a fraction of a cent on a cheap L2. Map data is stored **SSTORE2-style** (read

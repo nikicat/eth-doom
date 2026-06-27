@@ -22,9 +22,10 @@ contract SessionFactory {
         address indexed session, address indexed engine, address indexed map, address creator
     );
 
-    /// @notice Deploy a new game instance for `(engine, map)` and record it.
+    /// @notice Deploy a new game instance for `(engine, map)`, owned by the caller,
+    /// and record it. The owner may then `delegate` a session key for popup-free play.
     function createSession(address engine, address map) external returns (address session) {
-        session = address(new Session(engine, map));
+        session = address(new Session(engine, map, msg.sender));
         sessions.push(session);
         emit CreatedSession(session, engine, map, msg.sender);
     }

@@ -1008,7 +1008,10 @@ async function main() {
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
     guardsHex(), doorsHex(), itemsHex(),
   ]);
-  const session = await deploy(SessionA, [engine, map]);
+  // owner = our dev account; the same key both owns and submits here, so play works
+  // popup-free without a burner. (The burner + delegate() session-key flow is the next
+  // web task; the contract already enforces owner/session-key auth.)
+  const session = await deploy(SessionA, [engine, map, account.address]);
 
   latest = decode(
     (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex,

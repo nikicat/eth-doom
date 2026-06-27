@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use alloy::primitives::{Bytes, I256, U256};
+use alloy::primitives::{Address, Bytes, I256, U256};
 use alloy::providers::ProviderBuilder;
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
@@ -277,7 +277,7 @@ async fn main() -> Result<()> {
             Bytes::from(doors),
             Bytes::from(items),
         ).await?;
-        let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address()).await?;
+        let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address(), Address::ZERO).await?;
 
         decode_and_check(&session.getState().call().await?, &golden[0], 0)?;
 
@@ -326,7 +326,7 @@ async fn main() -> Result<()> {
             U256::from(sx), U256::from(sy), U256::from(sdir),
             Bytes::from(guards), Bytes::from(doors), Bytes::from(items),
         ).await?;
-        let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address()).await?;
+        let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address(), Address::ZERO).await?;
 
         let mut full = Vec::new();
         let mut compute = Vec::new();
@@ -350,7 +350,7 @@ async fn main() -> Result<()> {
             U256::from(sx), U256::from(sy), U256::from(sdir),
             Bytes::new(), Bytes::from(triplet("doors", 3)), Bytes::from(triplet("items", 3)),
         ).await?;
-        let s0 = sess::Session::deploy(provider.clone(), *engine.address(), *map0.address()).await?;
+        let s0 = sess::Session::deploy(provider.clone(), *engine.address(), *map0.address(), Address::ZERO).await?;
         let st0 = s0.getState().call().await?;
         let cmd0 = eng::Engine::Cmd { controlx: I256::ZERO, controly: I256::try_from(-35).unwrap(), buttons: 0 };
         let c0 = engine.tick(st0, *map0.address(), cmd0).estimate_gas().await?;
@@ -362,7 +362,7 @@ async fn main() -> Result<()> {
             Bytes::from(level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
             U256::from(sx), U256::from(sy), U256::from(sdir), Bytes::new(), Bytes::new(), Bytes::new(),
         ).await?;
-        let sb = sess::Session::deploy(provider.clone(), *engine.address(), *mapb.address()).await?;
+        let sb = sess::Session::deploy(provider.clone(), *engine.address(), *mapb.address(), Address::ZERO).await?;
         let stb = sb.getState().call().await?;
         let cmdb = eng::Engine::Cmd { controlx: I256::ZERO, controly: I256::try_from(-35).unwrap(), buttons: 0 };
         let cb = engine.tick(stb, *mapb.address(), cmdb).estimate_gas().await?;
