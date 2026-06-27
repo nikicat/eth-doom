@@ -11,6 +11,7 @@ node_modules/
 /web/dist/
 /oracle/build/
 *.wasm
+/web/public/wolfrender.mjs
 
 # id Software shareware assets — DO NOT COMMIT (read from a user-provided dir)
 /assets/

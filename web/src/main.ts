@@ -176,6 +176,59 @@ async function loadPredictor(): Promise<Predictor | null> {
   }
 }
 
+// --- wasm wall renderer (M4, optional) -------------------------------------------
+// `renderer/build.sh` compiles renderer/wolfrender.c (id's WL_DRAW.C wall math + a
+// portable grid-DDA ray cast) to wasm via Emscripten. It renders the textured wall
+// view + per-column depth into wasm memory each frame; we blit the framebuffer and
+// read the depth buffer to occlude sprites. Sprites / gun / HUD stay in TS on top.
+// Falls back to the TS raycaster if /wolfrender.mjs isn't built (or no id textures).
+type WallRenderer = { render: (px: number, py: number, pa: number, doors: Door[]) => void };
+
+async function loadWasmRenderer(): Promise<WallRenderer | null> {
+  if (!assets) return null; // needs real VSWAP wall textures; procedural uses the TS path
+  try {
+    // Load the Emscripten ES6 module via a blob URL so Vite's dev transform pipeline
+    // leaves it alone; locateFile points the .wasm fetch at /wolfrender.wasm (public).
+    const r = await fetch("/wolfrender.mjs");
+    if (!r.ok) return null;
+    const blobUrl = URL.createObjectURL(new Blob([await r.text()], { type: "text/javascript" }));
+    const mod: any = await import(/* @vite-ignore */ blobUrl);
+    const M = await mod.default({ locateFile: (p: string) => "/" + p });
+    const NPAGES = 220; // covers wall pages (≤ (89-1)*2+1) + the door page (98)
+    M._rinit(W, H, VW, VH, NPAGES);
+    // tiles (int32, once)
+    const tp = M._tiles_ptr() >> 2;
+    for (let i = 0; i < W * H; i++) M.HEAP32[tp + i] = tiles[i] & 0xff;
+    // wall textures (RGBA 64x64 per page, once) from the decoded VSWAP canvases
+    const texBase = M._tex_ptr(), okBase = M._texok_ptr();
+    const tmp = document.createElement("canvas"); tmp.width = 64; tmp.height = 64;
+    const tctx = tmp.getContext("2d", { willReadFrequently: true })!;
+    for (const [page, canvas] of assets.walls) {
+      if (page < 0 || page >= NPAGES) continue;
+      tctx.clearRect(0, 0, 64, 64);
+      tctx.drawImage(canvas, 0, 0, 64, 64);
+      M.HEAPU8.set(tctx.getImageData(0, 0, 64, 64).data, texBase + page * 64 * 64 * 4);
+      M.HEAPU8[okBase + page] = 1;
+    }
+    const fbBase = M._fb_ptr(), zbBase = M._zb_ptr() >> 2, dfBase = M._doorf_ptr() >> 2;
+    const fbLen = VW * VH * 4;
+    return {
+      render(px, py, pa, doors) {
+        for (let i = 0; i < doors.length; i++)
+          M.HEAPF32[dfBase + i] = doors[i].action === 0 ? 1 : doors[i].position / 0xffff;
+        M._render(px, py, pa);
+        // blit the framebuffer (a view onto wasm memory — no growth after init)
+        vctx.putImageData(new ImageData(new Uint8ClampedArray(M.HEAPU8.buffer, fbBase, fbLen), VW, VH), 0, 0);
+        for (let c = 0; c < VW; c++) zbuf[c] = M.HEAPF32[zbBase + c]; // depth for sprites
+      },
+    };
+  } catch (e) {
+    console.warn("wasm renderer unavailable:", e);
+    return null;
+  }
+}
+let wall: WallRenderer | null = null;
+
 // ---------------------------------------------------------------------------
 // packed-state decoder  (must match Engine.sol _pack layout)
 // ---------------------------------------------------------------------------
@@ -695,6 +748,48 @@ function renderView(s: State, clock: number, fx: Fx) {
   for (let i = 0; i < s.doors.length; i++)
     doorOpenFrac[i] = s.doors[i].action === 0 ? 1 : s.doors[i].position / 0xffff;
 
+  // walls: the wasm raycaster (fills the framebuffer + zbuf, then we blit) if built,
+  // else the TS raycaster below.
+  if (wall) {
+    wall.render(px, py, pa, s.doors);
+  } else renderWallsTS(px, py, pa);
+
+  // bonus items (floor markers) then guards on top
+  drawItems(px, py, pa, s);
+
+  // guards (depth-sorted far→near so nearer overdraw wins)
+  const order = s.guards
+    .map((g) => ({ g, d: Math.hypot(toU(g.x) - px, toU(g.y) - py) }))
+    .sort((a, b) => b.d - a.d);
+  for (const { g } of order) {
+    if (assets) drawGuardSprite(px, py, pa, g, clock, assets);
+    else drawGuard(px, py, pa, g, clock);
+  }
+
+  if (assets) drawWeaponSprite(clock, fx, assets);
+  else drawWeapon(clock, fx);
+
+  // damage flash
+  if (clock < fx.damageUntil) {
+    const a = 0.45 * (1 - (fx.damageUntil - clock) / 380);
+    vctx.fillStyle = `rgba(170,0,0,${Math.max(0, a)})`;
+    vctx.fillRect(0, 0, VW, VH);
+  }
+
+  if (s.player.health <= 0) {
+    vctx.fillStyle = "rgba(60,0,0,0.55)";
+    vctx.fillRect(0, 0, VW, VH);
+    vctx.fillStyle = "#f55";
+    vctx.font = "bold 48px ui-monospace, monospace";
+    vctx.textAlign = "center";
+    vctx.fillText("YOU DIED", VW / 2, VH / 2);
+    vctx.textAlign = "left";
+  }
+}
+
+// the original TS wall raycaster (ceiling/floor fill + one ray per column), used when
+// the wasm renderer isn't built or there are no real textures.
+function renderWallsTS(px: number, py: number, pa: number) {
   // ceiling + floor — Wolf3D draws these as flat colors, not textures:
   // floor is palette 0x19 (gray); E1 ceiling is palette 0x1d (dark gray), per vgaCeiling[].
   vctx.fillStyle = "#383838"; // ceiling (0x1d)
@@ -733,38 +828,6 @@ function renderView(s: State, clock: number, fx: Fx) {
       vctx.fillStyle = `rgb(${r},${gg},${b})`;
       vctx.fillRect(c, top, 1, lineH);
     }
-  }
-
-  // bonus items (floor markers) then guards on top
-  drawItems(px, py, pa, s);
-
-  // guards (depth-sorted far→near so nearer overdraw wins)
-  const order = s.guards
-    .map((g) => ({ g, d: Math.hypot(toU(g.x) - px, toU(g.y) - py) }))
-    .sort((a, b) => b.d - a.d);
-  for (const { g } of order) {
-    if (assets) drawGuardSprite(px, py, pa, g, clock, assets);
-    else drawGuard(px, py, pa, g, clock);
-  }
-
-  if (assets) drawWeaponSprite(clock, fx, assets);
-  else drawWeapon(clock, fx);
-
-  // damage flash
-  if (clock < fx.damageUntil) {
-    const a = 0.45 * (1 - (fx.damageUntil - clock) / 380);
-    vctx.fillStyle = `rgba(170,0,0,${Math.max(0, a)})`;
-    vctx.fillRect(0, 0, VW, VH);
-  }
-
-  if (s.player.health <= 0) {
-    vctx.fillStyle = "rgba(60,0,0,0.55)";
-    vctx.fillRect(0, 0, VW, VH);
-    vctx.fillStyle = "#f55";
-    vctx.font = "bold 48px ui-monospace, monospace";
-    vctx.textAlign = "center";
-    vctx.fillText("YOU DIED", VW / 2, VH / 2);
-    vctx.textAlign = "left";
   }
 }
 
@@ -969,6 +1032,7 @@ function renderMap(s: State) {
 // short "owner → burner" label for the HUD; set once the session key is delegated
 let sessionKeyLabel = "—";
 let predictLabel = "off (chain-only)"; // client-side prediction status
+let renderLabel = "ts raycaster"; // wall renderer: wasm vs TS raycaster
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 function renderDbg(s: State, tick: number, gas: number | null) {
@@ -979,6 +1043,7 @@ function renderDbg(s: State, tick: number, gas: number | null) {
     `gas/tick  ${gas != null ? `${(gas / 1000).toFixed(0)}k (${gas.toLocaleString("en-US")})` : "—"}\n` +
     `signer    ${sessionKeyLabel}\n` +
     `predict   ${predictLabel}\n` +
+    `walls     ${renderLabel}\n` +
     `art       ${assets ? "real id (VSWAP)" : "procedural"}\n` +
     `guards    ${s.guards.length}\n` +
     `rndindex  ${s.rndindex}\n\n` +
@@ -1045,6 +1110,9 @@ async function main() {
   dbg.textContent = "loading level + assets / deploying to anvil…";
   await loadLevel(); // real Wolf3D level from /level.json if present, else the test room
   assets = await loadAssets(); // authentic id art if /wolf/*.png present, else procedural
+  wall = await loadWasmRenderer(); // wasm wall raycaster if built, else the TS one
+  renderLabel = wall ? "wasm (Emscripten raycaster)" : "ts raycaster";
+  if (wall) console.log("[render] wasm wall renderer active");
   const engine = await deploy(EngineA, []);
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(),

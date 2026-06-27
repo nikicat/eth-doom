@@ -41,6 +41,9 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   (`oracle/build_wasm.sh`) advances each tick locally for instant feedback, while the burner submits
   to the chain in the background; the predicted state is reconciled byte-for-byte against
   `Session.getState()` (the HUD shows the live match count) — a continuous in-browser differential.
+  The textured **wall view is rendered in WebAssembly** too (`renderer/build.sh`, Emscripten): id's
+  `WL_DRAW.C` wall math + a portable ray cast fill an RGBA framebuffer + per-column depth that the
+  client blits, with sprites/gun/HUD drawn in TS on top (falls back to the TS raycaster if unbuilt).
 - **Authentic id art + the real first level, runtime-loaded** — `scripts/fetch-shareware.sh` downloads
   the freely-distributable Wolf3D shareware and the Rust extractors decode it: `wl-extract` does
   **VSWAP** → wall textures + guard sprites + the player pistol and **VGAGRAPH** (Huffman + VGA-planar)
@@ -62,7 +65,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
 | **M3** world completeness | ✅ | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (4-shot burst, 100 HP) ✅; **dog** (melee, 1 HP) ✅; **officer** (speed ×5, 50 HP) ✅ — full E1 roster; **`SessionFactory`** (many games, one engine/map) ✅ |
-| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; **web burner/auto-sign UX** — the client owns the session, delegates an ephemeral burner once, and auto-signs every tick with it (no popup per input) ✅; **client-side prediction** — the carved C sim compiled to wasm (clang `--target=wasm32`, no Emscripten) predicts each tick locally for instant feedback, reconciled byte-for-byte against the chain (live 936/936 match on E1L1) ✅; next: MegaETH deploy (needs RPC + funded key), optional full Wolf4SDL-port WASM renderer |
+| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; **web burner/auto-sign UX** — the client owns the session, delegates an ephemeral burner once, and auto-signs every tick with it (no popup per input) ✅; **client-side prediction** — the carved C sim compiled to wasm (clang `--target=wasm32`, no Emscripten) predicts each tick locally for instant feedback, reconciled byte-for-byte against the chain (live 936/936 match on E1L1) ✅; **wasm wall renderer** — id's `WL_DRAW.C` wall math (perspective height + texture-coordinate selection) plus a portable grid-DDA ray cast, compiled with **Emscripten**, rendering the textured wall view + per-column depth into a framebuffer the client blits (sprites/gun/HUD stay in TS on top) ✅; next: MegaETH deploy (needs RPC + funded key), optional full Wolf4SDL framework port |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
 
@@ -121,6 +124,7 @@ client additionally reconciles each predicted tick against `Session.getState()` 
 ( cd rust && cargo run -p harness )        # differential + gas, all scenarios
 bash oracle/build_wasm.sh                  # build the wasm predictor -> web/public/predict.wasm
 node oracle/verify_wasm.mjs                # differential: wasm predictor == golden vectors
+bash renderer/build.sh                     # build the wasm wall renderer (Emscripten) -> web/public
 # live view:
 anvil --silent &
 ( cd web && pnpm install && pnpm dev )      # http://localhost:5173
