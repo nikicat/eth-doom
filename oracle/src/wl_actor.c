@@ -21,7 +21,12 @@ int      attackcount;    /* fire cooldown */
 int      madenoise;      /* player fired this tic (alerts guards in the area) */
 
 static unsigned char areabyplayer[64];   /* single-area map: all reachable */
-static int doorposition[256];             /* no doors in M2 (kept for CheckLine) */
+
+/* WL_ACT1.C door globals. doorposition: leading edge 0=closed..0xffff=open. */
+doorobj_t doorobjlist[MAXDOORS];
+int       doornum;
+unsigned  doorposition[MAXDOORS];
+int       useheld;                        /* buttonheld[bt_use] edge latch */
 
 /* WL_STATE.C global direction tables */
 static const dirtype opposite[9] =
@@ -120,7 +125,8 @@ static int TryWalk(objtype *ob) {
     default:        return 0;
     }
 
-    if (doornum != -1) {            /* door blocking (none in M2) */
+    if (doornum != -1) {            /* a door blocks the path: start it opening */
+        OpenDoor(doornum);
         ob->distance = -doornum - 1;
         return 1;
     }
@@ -264,7 +270,155 @@ moveok:
     ob->distance -= move;
 }
 
-/* WL_STATE.C CheckLine — straight-line LOS over the tilemap (door logic dead in M2). */
+/* =========================================================================
+ * DOORS (WL_ACT1.C). Area connectivity (areaconnect/ConnectAreas) and audio
+ * (PlaySoundLocTile) are dropped: the single-area map keeps areabyplayer all-
+ * true, so doors still block, slide, gate line-of-sight (CheckLine reads
+ * doorposition), auto-close, and open on bump/use — only cross-door sound
+ * localization is lost. Door-jamb side marks (|0x40) are render-only.
+ * ========================================================================= */
+
+void InitDoorList(void) {
+    int i;
+    doornum = 0;
+    useheld = 0;
+    memset(doorposition, 0, sizeof doorposition);
+    for (i = 0; i < MAXDOORS; i++) doorobjlist[i].action = dr_closed;
+}
+
+void SpawnDoor(int tilex, int tiley, int vertical, int lock) {
+    doorposition[doornum] = 0;                  /* doors start fully closed */
+    doorobjlist[doornum].tilex = tilex;
+    doorobjlist[doornum].tiley = tiley;
+    doorobjlist[doornum].vertical = vertical;
+    doorobjlist[doornum].lock = lock;
+    doorobjlist[doornum].action = dr_closed;
+    doorobjlist[doornum].ticcount = 0;
+    tilemap[tilex][tiley] = doornum | 0x80;     /* a special "door" tile */
+    actorat[tilex][tiley] = (void *)(uintptr_t)(doornum | 0x80); /* solid wall */
+    doornum++;
+}
+
+void OpenDoor(int door) {
+    if (doorobjlist[door].action == dr_open)
+        doorobjlist[door].ticcount = 0;         /* reset open time */
+    else
+        doorobjlist[door].action = dr_opening;  /* start it opening */
+}
+
+void CloseDoor(int door) {
+    int tilex = doorobjlist[door].tilex;
+    int tiley = doorobjlist[door].tiley;
+
+    /* don't close on anything solid / on the player straddling the doorway */
+    if (actorat[tilex][tiley]) return;
+    if (player->tilex == tilex && player->tiley == tiley) return;
+    if (doorobjlist[door].vertical) {
+        if (player->tiley == tiley) {
+            if (((player->x + MINDIST) >> TILESHIFT) == tilex) return;
+            if (((player->x - MINDIST) >> TILESHIFT) == tilex) return;
+        }
+    } else {
+        if (player->tilex == tilex) {
+            if (((player->y + MINDIST) >> TILESHIFT) == tiley) return;
+            if (((player->y - MINDIST) >> TILESHIFT) == tiley) return;
+        }
+    }
+    /* (adjacent-actor straddle checks via actorat[tilex±1] dropped: no door grid) */
+
+    doorobjlist[door].action = dr_closing;
+    actorat[tilex][tiley] = (void *)(uintptr_t)(door | 0x80); /* make solid again */
+}
+
+void OperateDoor(int door) {
+    int lock = doorobjlist[door].lock;
+    if (lock >= dr_lock1 && lock <= dr_lock4)
+        return;                                 /* gamestate.keys==0 (no pickups) */
+    switch (doorobjlist[door].action) {
+    case dr_closed:
+    case dr_closing:
+        OpenDoor(door);
+        break;
+    case dr_open:
+    case dr_opening:
+        CloseDoor(door);
+        break;
+    }
+}
+
+static void DoorOpen(int door) {
+    if ((doorobjlist[door].ticcount += tics) >= OPENTICS)
+        CloseDoor(door);
+}
+
+static void DoorOpening(int door) {
+    long position = doorposition[door];
+    /* (first-crack area connect + open sound dropped) */
+    position += tics << 10;                      /* slide open an adaptive amount */
+    if (position >= 0xffff) {
+        position = 0xffff;
+        doorobjlist[door].ticcount = 0;
+        doorobjlist[door].action = dr_open;
+        actorat[doorobjlist[door].tilex][doorobjlist[door].tiley] = 0;
+    }
+    doorposition[door] = position;
+}
+
+static void DoorClosing(int door) {
+    int  tilex = doorobjlist[door].tilex;
+    int  tiley = doorobjlist[door].tiley;
+    long position;
+
+    if (((uintptr_t)actorat[tilex][tiley] != (unsigned)(door | 0x80))
+        || (player->tilex == tilex && player->tiley == tiley)) {
+        OpenDoor(door);                         /* something got inside */
+        return;
+    }
+    position = doorposition[door];
+    position -= tics << 10;
+    if (position <= 0) {
+        position = 0;
+        doorobjlist[door].action = dr_closed;   /* (area disconnect dropped) */
+    }
+    doorposition[door] = position;
+}
+
+void MoveDoors(void) {
+    int door;
+    for (door = 0; door < doornum; door++)
+        switch (doorobjlist[door].action) {
+        case dr_open:    DoorOpen(door); break;
+        case dr_opening: DoorOpening(door); break;
+        case dr_closing: DoorClosing(door); break;
+        }
+}
+
+/* WL_AGENT.C Cmd_Use — operate the door the player faces (edge-triggered via
+ * useheld). Elevator + pushwall paths dropped (no exit/secret in this scope). */
+void Cmd_Use(int buttons) {
+    int checkx, checky, doortile;
+
+    if (!((buttons >> bt_use) & 1)) { useheld = 0; return; }
+    if (useheld) return;
+
+    if (player->angle < ANGLES / 8 || player->angle > 7 * ANGLES / 8) {
+        checkx = player->tilex + 1; checky = player->tiley;
+    } else if (player->angle < 3 * ANGLES / 8) {
+        checkx = player->tilex;     checky = player->tiley - 1;
+    } else if (player->angle < 5 * ANGLES / 8) {
+        checkx = player->tilex - 1; checky = player->tiley;
+    } else {
+        checkx = player->tilex;     checky = player->tiley + 1;
+    }
+    doortile = tilemap[checkx][checky];
+    if (doortile & 0x80) {
+        useheld = 1;
+        OperateDoor(doortile & ~0x80);
+    }
+}
+
+/* WL_STATE.C CheckLine — straight-line LOS over the tilemap; a door tile blocks
+ * unless the ray crosses above its (sliding) leading edge doorposition. */
 static int CheckLine(objtype *ob) {
     int x1, y1, xt1, yt1, x2, y2, xt2, yt2;
     int x, y, xdist, ydist, xstep, ystep;
@@ -356,7 +510,11 @@ static void T_Chase(objtype *ob) {
 
     move = ob->speed * tics;
     while (move) {
-        if (ob->distance < 0) ob->distance = TILEGLOBAL;   /* door (none) */
+        if (ob->distance < 0) {        /* waiting for a door to open */
+            OpenDoor(-ob->distance - 1);
+            if (doorobjlist[-ob->distance - 1].action != dr_open) return;
+            ob->distance = TILEGLOBAL; /* door is now open, go ahead */
+        }
         if (move < ob->distance) { MoveObj(ob, move); break; }
         ob->x = ((long)ob->tilex << TILESHIFT) + TILEGLOBAL / 2;
         ob->y = ((long)ob->tiley << TILESHIFT) + TILEGLOBAL / 2;

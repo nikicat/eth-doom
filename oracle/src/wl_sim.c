@@ -88,10 +88,17 @@ int TryMove(objtype *ob)
 
     for (y = yl; y <= yh; y++)
         for (x = xl; x <= xh; x++) {
+            unsigned v;
             if (x < 0 || x >= MAPSIZE || y < 0 || y >= MAPSIZE)
                 return 0;
-            if (tilemap[x][y])
-                return 0;
+            v = tilemap[x][y];
+            if (v) {
+                if (v & 0x80) {     /* door: solid until fully open (id clears actorat) */
+                    if (doorobjlist[v & ~0x80].action != dr_open) return 0;
+                } else {
+                    return 0;       /* solid wall */
+                }
+            }
         }
     return 1;
 }

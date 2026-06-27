@@ -25,5 +25,14 @@ run move_basic test_room.txt 8 8 1
 "$ORACLE" oracle/maps/test_room.txt vectors/kill_guard.input.txt 4 8 1 12 8 2 \
     > vectors/kill_guard.golden.jsonl
 
+# door_use: player walks up to the vertical door at (8,8), opens it with Use, and
+# slides through (no guard) — exercises Cmd_Use/OperateDoor/MoveDoors + door collision.
+run door_use door_room.txt 4 8 1
+
+# door_guard: a guard across the closed door wakes on the player's gunfire (noise),
+# chases, bumps the door (TryWalk->OpenDoor), waits for it (T_Chase), then comes through.
+"$ORACLE" oracle/maps/door_room.txt vectors/door_guard.input.txt 4 8 1 12 8 2 \
+    > vectors/door_guard.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl

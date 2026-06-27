@@ -32,6 +32,16 @@ contract Engine {
     int256 internal constant STARTAMMO = 8;
     int256 internal constant TICS = 1;
     uint8 internal constant BT_STRAFE = 0x02;
+    uint8 internal constant BT_USE = 3; // buttons bit index
+
+    // --- doors (WL_ACT1.C / WL_DEF.H) ---
+    uint256 internal constant OPENTICS = 300;
+    uint256 internal constant DR_OPEN = 0;
+    uint256 internal constant DR_CLOSED = 1;
+    uint256 internal constant DR_OPENING = 2;
+    uint256 internal constant DR_CLOSING = 3;
+    uint256 internal constant DR_LOCK1 = 1;
+    uint256 internal constant DR_LOCK4 = 4;
 
     // dirtype: east=0 ne=1 north=2 nw=3 west=4 sw=5 south=6 se=7 nodir=8
     int256 internal constant EAST = 0;
@@ -76,6 +86,19 @@ contract Engine {
         int256 health;
         int256 ammo;
         int256 attackcount;
+        uint256 useheld; // buttonheld[bt_use] edge latch
+    }
+
+    /// @dev WL_ACT1.C doorobj_t. tilex/tiley/vertical/lock are static (from Map);
+    /// action/ticcount/position are the per-tick dynamic state (packed).
+    struct Door {
+        uint256 tilex;
+        uint256 tiley;
+        uint256 vertical;
+        uint256 lock;
+        uint256 action; // DR_OPEN/CLOSED/OPENING/CLOSING
+        int256 ticcount;
+        int256 position; // leading edge 0=closed..0xffff=open
     }
 
     struct Actor {
@@ -101,10 +124,11 @@ contract Engine {
         uint8 buttons;
     }
 
-    /// @dev Per-tick working context (mutable: p/actors/rndindex; rest read-only).
+    /// @dev Per-tick working context (mutable: p/actors/doors/rndindex; rest read-only).
     struct World {
         Player p;
         Actor[] actors;
+        Door[] doors;
         uint256 rndindex;
         bytes tiles;
         uint256 w;
@@ -146,11 +170,15 @@ contract Engine {
         returns (bytes memory)
     {
         World memory wd = _load(map);
-        (wd.p, wd.actors, wd.rndindex) = _unpack(state);
+        _unpack(state, wd); // fills p, doors (dynamic), actors, rndindex
 
+        // WL_PLAY.C PlayLoop order: MoveDoors, then the player's T_Player
+        // (ControlMovement + Cmd_Use + weapon), then every actor's DoActor.
+        _moveDoors(wd);
         _controlMovement(wd, cmd);
         wd.plux = wd.p.x >> 8; // UNSIGNEDSHIFT
         wd.pluy = wd.p.y >> 8;
+        _cmdUse(wd, cmd);
         _playerAttack(wd, cmd);
         for (uint256 i = 0; i < wd.actors.length; i++) {
             _doActor(wd, wd.actors[i]);
@@ -174,6 +202,24 @@ contract Engine {
         wd.tiles = tl;
         wd.trig = Trig.table();
         wd.rnd = Rng.table();
+
+        // doors: static fields from the Map (3 bytes each: tilex, tiley,
+        // vertical|lock<<1), in scan order = doornum. Dynamic fields default to
+        // fully closed; tick() overwrites them from the packed state.
+        bytes memory dd = IMap(map).doors();
+        uint256 nd = dd.length / 3;
+        wd.doors = new Door[](nd);
+        for (uint256 i = 0; i < nd; i++) {
+            Door memory dr = wd.doors[i];
+            dr.tilex = uint8(dd[i * 3]);
+            dr.tiley = uint8(dd[i * 3 + 1]);
+            uint256 vl = uint8(dd[i * 3 + 2]);
+            dr.vertical = vl & 1;
+            dr.lock = vl >> 1;
+            dr.action = DR_CLOSED;
+            dr.position = 0;
+            dr.ticcount = 0;
+        }
     }
 
     /// WL_ACT2.C SpawnStand(en_guard): spawn dormant (standing), facing a cardinal
@@ -262,10 +308,137 @@ contract Engine {
         for (int256 y = yl; y <= yh; y++) {
             for (int256 x = xl; x <= xh; x++) {
                 if (x < 0 || x >= int256(wd.w) || y < 0 || y >= int256(wd.h)) return false;
-                if (_tile(wd, uint256(y) * wd.w + uint256(x)) != 0) return false;
+                if (_actorTile(wd, x, y) != 0) return false; // door is solid until fully open
             }
         }
         return true;
+    }
+
+    /// @dev Effective `actorat` for a tile: a wall is its value; a door tile
+    /// (`doornum|0x80`) reads as solid UNLESS the door is fully open (DR_OPEN),
+    /// matching id clearing `actorat` in DoorOpening. (No actor grid, so actors
+    /// don't occupy tiles here — the documented single-area simplification.)
+    function _actorTile(World memory wd, int256 x, int256 y) internal pure returns (uint256) {
+        if (x < 0 || x >= int256(wd.w) || y < 0 || y >= int256(wd.h)) return 1; // OOB = solid
+        uint256 v = _tile(wd, uint256(y) * wd.w + uint256(x));
+        if (v & 0x80 != 0) {
+            if (wd.doors[v & 0x7f].action == DR_OPEN) return 0; // fully open: passable
+        }
+        return v;
+    }
+
+    // ---------------- doors (WL_ACT1.C / WL_AGENT.C) ----------------
+    // Area connectivity (areaconnect/ConnectAreas) and audio are dropped: the
+    // single-area map keeps every area connected, so doors block, slide, gate LOS
+    // (via _losHit + position), auto-close, and open on bump/use — but cross-door
+    // sound localization is lost (madenoise reaches every guard).
+
+    function _moveDoors(World memory wd) internal pure {
+        for (uint256 i = 0; i < wd.doors.length; i++) {
+            uint256 action = wd.doors[i].action;
+            if (action == DR_OPEN) _doorOpen(wd, i);
+            else if (action == DR_OPENING) _doorOpening(wd, i);
+            else if (action == DR_CLOSING) _doorClosing(wd, i);
+        }
+    }
+
+    function _openDoor(World memory wd, uint256 d) internal pure {
+        if (wd.doors[d].action == DR_OPEN) wd.doors[d].ticcount = 0; // reset open time
+        else wd.doors[d].action = DR_OPENING;
+    }
+
+    function _closeDoor(World memory wd, uint256 d) internal pure {
+        Door memory door = wd.doors[d];
+        // don't close on anything solid: the door's own marker is set unless fully
+        // open (id's `if (actorat[tilex][tiley]) return;`), nor on the player.
+        if (door.action != DR_OPEN) return;
+        if (wd.p.tilex == door.tilex && wd.p.tiley == door.tiley) return;
+        if (door.vertical != 0) {
+            if (wd.p.tiley == door.tiley) {
+                if ((wd.p.x + MINDIST) >> 16 == int256(door.tilex)) return;
+                if ((wd.p.x - MINDIST) >> 16 == int256(door.tilex)) return;
+            }
+        } else {
+            if (wd.p.tilex == door.tilex) {
+                if ((wd.p.y + MINDIST) >> 16 == int256(door.tiley)) return;
+                if ((wd.p.y - MINDIST) >> 16 == int256(door.tiley)) return;
+            }
+        }
+        door.action = DR_CLOSING; // (adjacent-actor straddle checks dropped: no door grid)
+    }
+
+    function _operateDoor(World memory wd, uint256 d) internal pure {
+        uint256 lock = wd.doors[d].lock;
+        if (lock >= DR_LOCK1 && lock <= DR_LOCK4) return; // gamestate.keys==0 (no pickups)
+        uint256 action = wd.doors[d].action;
+        if (action == DR_CLOSED || action == DR_CLOSING) _openDoor(wd, d);
+        else if (action == DR_OPEN || action == DR_OPENING) _closeDoor(wd, d);
+    }
+
+    function _doorOpen(World memory wd, uint256 d) internal pure {
+        wd.doors[d].ticcount += TICS;
+        if (wd.doors[d].ticcount >= int256(OPENTICS)) _closeDoor(wd, d);
+    }
+
+    function _doorOpening(World memory wd, uint256 d) internal pure {
+        int256 position = wd.doors[d].position;
+        position += TICS << 10; // slide open an adaptive amount
+        if (position >= 0xffff) {
+            position = 0xffff;
+            wd.doors[d].ticcount = 0;
+            wd.doors[d].action = DR_OPEN; // actorat cleared (now passable)
+        }
+        wd.doors[d].position = position;
+    }
+
+    function _doorClosing(World memory wd, uint256 d) internal pure {
+        Door memory door = wd.doors[d];
+        // something got inside the door? (only the player is tracked, no actor grid)
+        if (wd.p.tilex == door.tilex && wd.p.tiley == door.tiley) {
+            _openDoor(wd, d);
+            return;
+        }
+        int256 position = door.position - (TICS << 10);
+        if (position <= 0) {
+            position = 0;
+            door.action = DR_CLOSED;
+        }
+        door.position = position;
+    }
+
+    /// WL_AGENT.C Cmd_Use — operate the door the player faces (edge-triggered via
+    /// useheld). Elevator + pushwall paths dropped.
+    function _cmdUse(World memory wd, Cmd calldata cmd) internal pure {
+        if (((cmd.buttons >> BT_USE) & 1) == 0) {
+            wd.p.useheld = 0;
+            return;
+        }
+        if (wd.p.useheld != 0) return;
+
+        int256 cx;
+        int256 cy;
+        int256 angle = wd.p.angle;
+        int256 ptx = int256(wd.p.tilex);
+        int256 pty = int256(wd.p.tiley);
+        if (angle < ANGLES / 8 || angle > 7 * ANGLES / 8) {
+            cx = ptx + 1;
+            cy = pty;
+        } else if (angle < 3 * ANGLES / 8) {
+            cx = ptx;
+            cy = pty - 1;
+        } else if (angle < 5 * ANGLES / 8) {
+            cx = ptx - 1;
+            cy = pty;
+        } else {
+            cx = ptx;
+            cy = pty + 1;
+        }
+        if (cx < 0 || cx >= int256(wd.w) || cy < 0 || cy >= int256(wd.h)) return;
+        uint256 doortile = _tile(wd, uint256(cy) * wd.w + uint256(cx));
+        if (doortile & 0x80 != 0) {
+            wd.p.useheld = 1;
+            _operateDoor(wd, doortile & 0x7f);
+        }
     }
 
     // ---------------- enemy AI (WL_STATE.C / WL_ACT2.C / WL_PLAY.C) ----------------
@@ -275,45 +448,63 @@ contract Engine {
         return Rng.at(wd.rnd, wd.rndindex);
     }
 
-    /// WL_STATE.C TryWalk (guard: CHECKSIDE on cardinals, CHECKDIAG on diagonals;
-    /// walls only — single guard). Updates tilex/tiley/distance; returns success.
+    /// WL_STATE.C TryWalk (guard: CHECKSIDE on cardinals, CHECKDIAG on diagonals).
+    /// A door on a cardinal step doesn't block — it's opened and the guard waits
+    /// (distance = -doornum-1); a door on a diagonal blocks. Returns success.
     function _tryWalk(World memory wd, Actor memory a) internal pure returns (bool) {
         int256 tx = int256(a.tilex);
         int256 ty = int256(a.tiley);
+        int256 doornum = -1;
         if (a.dir == 0) {
             // east
-            if (_wall(wd, tx + 1, ty)) return false;
+            (bool blk, int256 dn) = _checkSide(wd, tx + 1, ty);
+            if (blk) return false;
+            doornum = dn;
             tx += 1;
         } else if (a.dir == 1) {
             // northeast
-            if (_wall(wd, tx + 1, ty - 1) || _wall(wd, tx + 1, ty) || _wall(wd, tx, ty - 1)) return false;
+            if (_checkDiag(wd, tx + 1, ty - 1) || _checkDiag(wd, tx + 1, ty) || _checkDiag(wd, tx, ty - 1)) {
+                return false;
+            }
             tx += 1;
             ty -= 1;
         } else if (a.dir == 2) {
             // north
-            if (_wall(wd, tx, ty - 1)) return false;
+            (bool blk, int256 dn) = _checkSide(wd, tx, ty - 1);
+            if (blk) return false;
+            doornum = dn;
             ty -= 1;
         } else if (a.dir == 3) {
             // northwest
-            if (_wall(wd, tx - 1, ty - 1) || _wall(wd, tx - 1, ty) || _wall(wd, tx, ty - 1)) return false;
+            if (_checkDiag(wd, tx - 1, ty - 1) || _checkDiag(wd, tx - 1, ty) || _checkDiag(wd, tx, ty - 1)) {
+                return false;
+            }
             tx -= 1;
             ty -= 1;
         } else if (a.dir == 4) {
             // west
-            if (_wall(wd, tx - 1, ty)) return false;
+            (bool blk, int256 dn) = _checkSide(wd, tx - 1, ty);
+            if (blk) return false;
+            doornum = dn;
             tx -= 1;
         } else if (a.dir == 5) {
             // southwest
-            if (_wall(wd, tx - 1, ty + 1) || _wall(wd, tx - 1, ty) || _wall(wd, tx, ty + 1)) return false;
+            if (_checkDiag(wd, tx - 1, ty + 1) || _checkDiag(wd, tx - 1, ty) || _checkDiag(wd, tx, ty + 1)) {
+                return false;
+            }
             tx -= 1;
             ty += 1;
         } else if (a.dir == 6) {
             // south
-            if (_wall(wd, tx, ty + 1)) return false;
+            (bool blk, int256 dn) = _checkSide(wd, tx, ty + 1);
+            if (blk) return false;
+            doornum = dn;
             ty += 1;
         } else if (a.dir == 7) {
             // southeast
-            if (_wall(wd, tx + 1, ty + 1) || _wall(wd, tx + 1, ty) || _wall(wd, tx, ty + 1)) return false;
+            if (_checkDiag(wd, tx + 1, ty + 1) || _checkDiag(wd, tx + 1, ty) || _checkDiag(wd, tx, ty + 1)) {
+                return false;
+            }
             tx += 1;
             ty += 1;
         } else {
@@ -321,13 +512,34 @@ contract Engine {
         }
         a.tilex = uint256(tx);
         a.tiley = uint256(ty);
+        if (doornum != -1) {
+            // a door blocks the path: start it opening and wait
+            _openDoor(wd, uint256(doornum));
+            a.distance = -doornum - 1;
+            return true;
+        }
         a.distance = TILEGLOBAL;
         return true;
     }
 
-    function _wall(World memory wd, int256 x, int256 y) internal pure returns (bool) {
-        if (x < 0 || x >= int256(wd.w) || y < 0 || y >= int256(wd.h)) return true;
-        return _tile(wd, uint256(y) * wd.w + uint256(x)) != 0;
+    /// WL_STATE.C CHECKSIDE: wall blocks; a closed/opening door yields its doornum
+    /// (guard waits); an open door (actorat cleared) passes freely.
+    function _checkSide(World memory wd, int256 x, int256 y)
+        internal
+        pure
+        returns (bool blocked, int256 doornum)
+    {
+        doornum = -1;
+        uint256 t = _actorTile(wd, x, y);
+        if (t != 0) {
+            if (t < 128) blocked = true; // solid wall
+            else doornum = int256(t & 0x7f); // door (not open)
+        }
+    }
+
+    /// WL_STATE.C CHECKDIAG: any non-passable tile (wall or non-open door) blocks.
+    function _checkDiag(World memory wd, int256 x, int256 y) internal pure returns (bool) {
+        return _actorTile(wd, x, y) != 0;
     }
 
     /// WL_STATE.C SelectChaseDir
@@ -496,7 +708,7 @@ contract Engine {
             do {
                 int256 y = yfrac >> 8;
                 yfrac += ystep;
-                if (_wall(wd, x, y)) return false;
+                if (_losHit(wd, x, y, yfrac, ystep)) return false;
                 x += xstep;
             } while (x != xend);
         }
@@ -519,11 +731,29 @@ contract Engine {
             do {
                 int256 x = xfrac >> 8;
                 xfrac += xstep;
-                if (_wall(wd, x, y)) return false;
+                if (_losHit(wd, x, y, xfrac, xstep)) return false;
                 y += ystep;
             } while (y != yend);
         }
         return true;
+    }
+
+    /// WL_STATE.C CheckLine inner test: a wall blocks; a door blocks unless the
+    /// ray crosses above its sliding leading edge. `frac`/`step` are the just-
+    /// advanced perpendicular accumulator; `intercept` is taken as a 32-bit
+    /// unsigned (id's `unsigned intercept`) for the doorposition compare.
+    function _losHit(World memory wd, int256 x, int256 y, int256 frac, int256 step)
+        internal
+        pure
+        returns (bool)
+    {
+        if (x < 0 || x >= int256(wd.w) || y < 0 || y >= int256(wd.h)) return true; // OOB = wall
+        uint256 value = _tile(wd, uint256(y) * wd.w + uint256(x));
+        if (value == 0) return false;
+        if (value < 128) return true; // solid wall (value>256 impossible for a byte)
+        uint256 dn = value & 0x7f;
+        int256 intercept = frac - step / 2;
+        return uint256(uint32(int32(intercept))) > uint256(wd.doors[dn].position);
     }
 
     /// WL_ACT2.C T_Chase (guard)
@@ -549,7 +779,12 @@ contract Engine {
         }
         int256 move = a.speed * TICS;
         while (move != 0) {
-            if (a.distance < 0) a.distance = TILEGLOBAL; // door (none)
+            if (a.distance < 0) {
+                // waiting for a door to open
+                _openDoor(wd, uint256(-a.distance - 1));
+                if (wd.doors[uint256(-a.distance - 1)].action != DR_OPEN) return;
+                a.distance = TILEGLOBAL; // door is now open, go ahead
+            }
             if (move < a.distance) {
                 _moveObj(wd, a, move);
                 break;
@@ -792,52 +1027,80 @@ contract Engine {
         return v < 0 ? -v : v;
     }
 
-    // ---------------- state codec: header + 1 word/player + 1 word/actor ----------------
-    // header: rndindex:uint8@0 | numactors:uint8@8
-    // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 | tiley:uint8@120
+    // ------- state codec: header + 1 word/player + 1 word/door + 1 word/actor -------
+    // header: rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16
+    // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
+    //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176
+    // door:   action:uint8@0 | ticcount:int16@16 | position:uint16@32
     // actor:  x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88 |
     //         ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 |
-    //         obclass:uint8@168 | speed:int32@176 | active:uint8@208
+    //         obclass:uint8@168 | speed:int32@176 | active:uint8@208 | temp2:int16@216
+    // blob order: [header][player][door_0..][actor_0..]
 
     function _pack(World memory wd) internal pure returns (bytes memory out) {
-        uint256 n = wd.actors.length;
-        out = new bytes(32 * (2 + n));
-        uint256 header = (wd.rndindex & 0xff) | ((n & 0xff) << 8);
+        uint256 nd = wd.doors.length;
+        uint256 na = wd.actors.length;
+        out = new bytes(32 * (2 + nd + na));
+        uint256 header = (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((nd & 0xff) << 16);
         uint256 pw = _packPlayer(wd.p);
         assembly {
             mstore(add(out, 0x20), header)
             mstore(add(out, 0x40), pw)
         }
-        for (uint256 i = 0; i < n; i++) {
+        for (uint256 i = 0; i < nd; i++) {
+            uint256 dw = _packDoor(wd.doors[i]);
+            assembly {
+                mstore(add(add(out, 0x60), mul(i, 0x20)), dw)
+            }
+        }
+        for (uint256 i = 0; i < na; i++) {
             uint256 aw = _packActor(wd.actors[i]);
             assembly {
-                mstore(add(add(out, 0x60), mul(i, 0x20)), aw)
+                mstore(add(add(out, 0x60), mul(add(nd, i), 0x20)), aw)
             }
         }
     }
 
-    function _unpack(bytes calldata b)
-        internal
-        pure
-        returns (Player memory p, Actor[] memory actors, uint256 rndindex)
-    {
+    /// Fills wd.p, wd.actors, wd.rndindex, and the dynamic door fields (action/
+    /// ticcount/position) onto wd.doors (whose static fields _load set from the Map).
+    function _unpack(bytes calldata b, World memory wd) internal pure {
         uint256 header;
         uint256 pw;
         assembly {
             header := calldataload(b.offset)
             pw := calldataload(add(b.offset, 0x20))
         }
-        rndindex = header & 0xff;
-        uint256 n = (header >> 8) & 0xff;
-        p = _unpackPlayer(pw);
-        actors = new Actor[](n);
-        for (uint256 i = 0; i < n; i++) {
+        wd.rndindex = header & 0xff;
+        uint256 na = (header >> 8) & 0xff;
+        uint256 nd = (header >> 16) & 0xff;
+        wd.p = _unpackPlayer(pw);
+        for (uint256 i = 0; i < nd; i++) {
+            uint256 dw;
+            assembly {
+                dw := calldataload(add(b.offset, add(0x40, mul(i, 0x20))))
+            }
+            _unpackDoorInto(wd.doors[i], dw);
+        }
+        wd.actors = new Actor[](na);
+        for (uint256 i = 0; i < na; i++) {
             uint256 aw;
             assembly {
-                aw := calldataload(add(b.offset, add(0x40, mul(i, 0x20))))
+                aw := calldataload(add(b.offset, add(0x40, mul(add(nd, i), 0x20))))
             }
-            actors[i] = _unpackActor(aw);
+            wd.actors[i] = _unpackActor(aw);
         }
+    }
+
+    function _packDoor(Door memory d) internal pure returns (uint256 w) {
+        w = d.action & 0xff;
+        w |= uint256(uint16(int16(d.ticcount))) << 16;
+        w |= (uint256(d.position) & 0xffff) << 32;
+    }
+
+    function _unpackDoorInto(Door memory d, uint256 w) internal pure {
+        d.action = w & 0xff;
+        d.ticcount = int256(int16(uint16(w >> 16)));
+        d.position = int256((w >> 32) & 0xffff);
     }
 
     function _packPlayer(Player memory p) internal pure returns (uint256 w) {
@@ -850,6 +1113,7 @@ contract Engine {
         w |= uint256(uint16(int16(p.health))) << 128;
         w |= uint256(uint16(int16(p.ammo))) << 144;
         w |= uint256(uint16(int16(p.attackcount))) << 160;
+        w |= (p.useheld & 1) << 176;
     }
 
     function _unpackPlayer(uint256 w) internal pure returns (Player memory p) {
@@ -862,6 +1126,7 @@ contract Engine {
         p.health = int256(int16(uint16(w >> 128)));
         p.ammo = int256(int16(uint16(w >> 144)));
         p.attackcount = int256(int16(uint16(w >> 160)));
+        p.useheld = (w >> 176) & 1;
     }
 
     function _packActor(Actor memory a) internal pure returns (uint256 w) {

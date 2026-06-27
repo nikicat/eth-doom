@@ -13,4 +13,7 @@ interface IMap {
     function spawn() external view returns (uint256 x, uint256 y, uint256 dir);
     /// @notice Guard spawns, 3 bytes each: tilex, tiley, dir.
     function guards() external view returns (bytes memory);
+    /// @notice Doors in scan order (= doornum), 3 bytes each: tilex, tiley,
+    /// (vertical | lock<<1). The tilemap encodes door tiles as `doornum | 0x80`.
+    function doors() external view returns (bytes memory);
 }

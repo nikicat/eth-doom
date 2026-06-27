@@ -34,27 +34,41 @@ const MAX_GUARDS = 12; // cap spawned guards (nearest to the player) for gas/san
 // the per-tile wall value (0 = floor; 1..89 = a wall texture); the engine only
 // needs the 0/1 collision grid (tilesHex).
 let W = 16, H = 16;
-let tiles = new Uint16Array(W * H);
+let tiles = new Uint16Array(W * H); // runtime tilemap: 1..89 wall, 0x80|n door, 0 floor
 let spawnTile = { x: 8, y: 8, dir: 1 }; // engine dir: angle = (1-dir)*90 ; 1 = east
 let guardTiles: number[][] = [[12, 8]];
+let doorList: number[][] = []; // [tilex, tiley, vertical|lock<<1] in doornum order
 let levelName = "test room";
 
-const isSolid = (v: number) => v >= 1 && v < 90; // doors (90+) & areas are passable
+const isWall = (v: number) => v >= 1 && v < 90; // 1..89 = solid wall texture
+const isDoor = (v: number) => (v & 0x80) !== 0; // 0x80|doornum
 
 function initTestRoom() {
+  // a room split by a N–S wall with a door (7,8); spawn faces it, a guard waits
+  // behind. Press E to open the door, or fire (the noise wakes the guard).
   const MAP = [
-    "################", "#..............#", "#..###....###..#", "#..............#",
-    "#..............#", "#.....####.....#", "#..............#", "#..............#",
-    "#..............#", "#.....####.....#", "#..............#", "#..............#",
-    "#..###....###..#", "#..............#", "#..............#", "################",
+    "################", "#......#.......#", "#......#.......#", "#......#.......#",
+    "#......#.......#", "#......#.......#", "#......#.......#", "#......#.......#",
+    "#......D.......#", "#......#.......#", "#......#.......#", "#......#.......#",
+    "#......#.......#", "#......#.......#", "#......#.......#", "################",
   ];
   W = 16; H = 16;
   tiles = new Uint16Array(W * H);
+  doorList = [];
+  let doornum = 0;
   for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) tiles[y * W + x] = MAP[y][x] === "#" ? 1 : 0;
-  spawnTile = { x: 8, y: 8, dir: 1 };
-  guardTiles = [[12, 8, 2]]; // facing west (dir*2) toward the player so it sees you
-  levelName = "test room";
+    for (let x = 0; x < W; x++) {
+      const c = MAP[y][x];
+      if (c === "#") tiles[y * W + x] = 1;
+      else if (c === "D" || c === "d") {
+        tiles[y * W + x] = 0x80 | doornum;
+        doorList.push([x, y, c === "D" ? 1 : 0]); // vertical|lock<<1, lock 0
+        doornum++;
+      } else tiles[y * W + x] = 0;
+    }
+  spawnTile = { x: 4, y: 8, dir: 1 };
+  guardTiles = [[11, 8, 2]]; // behind the door, facing west
+  levelName = "test room (door demo)";
 }
 initTestRoom();
 
@@ -67,6 +81,7 @@ async function loadLevel(): Promise<boolean> {
     tiles = Uint16Array.from(L.tiles as number[]);
     spawnTile = { x: L.spawn.x, y: L.spawn.y, dir: L.spawn.dir };
     levelName = L.name ?? "level";
+    doorList = (L.doors as number[][] | undefined) ?? [];
     guardTiles = (L.guards as number[][])
       .map(([x, y, dir]) => ({ x, y, dir: dir ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
       .sort((a, b) => a.d - b.d)
@@ -78,18 +93,26 @@ async function loadLevel(): Promise<boolean> {
   }
 }
 
-// 0/1 collision grid deployed to Map.sol (the engine only cares about solid/not)
+// runtime tilemap deployed to Map.sol (raw values: wall 1..89, door 0x80|n, floor 0)
 function tilesHex(): Hex {
   const t = new Uint8Array(W * H);
-  for (let i = 0; i < t.length; i++) t[i] = isSolid(tiles[i]) ? 1 : 0;
+  for (let i = 0; i < t.length; i++) t[i] = tiles[i] & 0xff;
   return bytesToHex(t);
 }
-// guards blob: 3 bytes each (tilex, tiley, dir) — engine spawns them alerted
+// guards blob: 3 bytes each (tilex, tiley, dir) — engine spawns them dormant
 function guardsHex(): Hex {
   const b = new Uint8Array(guardTiles.length * 3);
   guardTiles.forEach(([x, y, dir], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = (dir ?? 0) & 3; });
   return bytesToHex(b);
 }
+// doors blob: 3 bytes each (tilex, tiley, vertical|lock<<1), in doornum order
+function doorsHex(): Hex {
+  const b = new Uint8Array(doorList.length * 3);
+  doorList.forEach(([x, y, pk], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = pk ?? 0; });
+  return bytesToHex(b);
+}
+// per-doornum open fraction (0 closed .. 1 open), refreshed each frame from state
+const doorOpenFrac = new Float64Array(64);
 
 async function deploy(art: any, args: any[]): Promise<Address> {
   const hash = await wallet.deployContract({
@@ -120,12 +143,14 @@ function sfld(w: bigint, sh: number, bits: number): number {
 }
 
 type Guard = { x: number; y: number; dir: number; state: number; hp: number };
+type Door = { action: number; position: number };
 type State = {
   rndindex: number;
   player: {
     x: number; y: number; angle: number; tilex: number; tiley: number;
     health: number; ammo: number; attackcount: number;
   };
+  doors: Door[];
   guards: Guard[];
 };
 
@@ -133,10 +158,16 @@ function decode(hex: string): State {
   const w = words(hex);
   const header = w[0];
   const n = fld(header, 8, 8);
+  const nd = fld(header, 16, 8);
   const pw = w[1];
+  const doors: Door[] = [];
+  for (let i = 0; i < nd; i++) {
+    const d = w[2 + i]; // door word: action@0, ticcount@16, position@32
+    doors.push({ action: fld(d, 0, 8), position: fld(d, 32, 16) });
+  }
   const guards: Guard[] = [];
   for (let i = 0; i < n; i++) {
-    const a = w[2 + i];
+    const a = w[2 + nd + i];
     guards.push({
       x: sfld(a, 0, 32),
       y: sfld(a, 32, 32),
@@ -157,6 +188,7 @@ function decode(hex: string): State {
       ammo: sfld(pw, 144, 16),
       attackcount: sfld(pw, 160, 16),
     },
+    doors,
     guards,
   };
 }
@@ -216,6 +248,15 @@ const zbuf = new Float64Array(VW); // perpendicular wall distance per column (sa
  * its distance, whether it's a vertical (E/W-facing) grid line, and the texture
  * column 0..63 where the ray struck the wall (for texture mapping).
  */
+// Does the tile at (mx,my) stop the ray here? Walls always do; a door's sliding
+// panel covers fraction (1-open) of the cell face (`frac` 0..1 along that face),
+// so the receded part is see-through — the ray passes into the room beyond.
+function rayBlocked(v: number, frac: number): boolean {
+  if (isWall(v)) return true;
+  if (isDoor(v)) return frac < 1 - doorOpenFrac[v & 0x7f];
+  return false;
+}
+
 function castRay(px: number, py: number, ra: number): { dist: number; vertical: boolean; tex: number; tile: number } {
   ra = fixAng(ra);
   const cs = Math.cos(ra * DR), sn = Math.sin(ra * DR);
@@ -232,7 +273,8 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
   while (dof < 8) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
-    if (mx >= 0 && mx < W && my >= 0 && my < H && isSolid(tiles[mp])) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = tiles[mp]; }
+    const frac = ry / U - Math.floor(ry / U); // door panel slides along Y for a vertical face
+    if (mx >= 0 && mx < W && my >= 0 && my < H && rayBlocked(tiles[mp], frac)) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = tiles[mp]; }
     else { rx += xo; ry += yo; dof++; }
   }
 
@@ -244,7 +286,8 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
   while (dof < 8) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
-    if (mx >= 0 && mx < W && my >= 0 && my < H && isSolid(tiles[mp])) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = tiles[mp]; }
+    const frac = rx / U - Math.floor(rx / U); // door panel slides along X for a horizontal face
+    if (mx >= 0 && mx < W && my >= 0 && my < H && rayBlocked(tiles[mp], frac)) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = tiles[mp]; }
     else { rx += xo; ry += yo; dof++; }
   }
 
@@ -267,6 +310,7 @@ const PISTOL_READY = 425;
 const PISTOL_FIRE = [426, 427, 428];
 // Wolf3D wall texture page for tile value v: vertical (N/S) face (v-1)*2, horizontal +1
 const wallPage = (v: number, vertical: boolean) => (Math.max(1, v) - 1) * 2 + (vertical ? 0 : 1);
+const DOOR_PAGE = 98; // VSWAP door wall texture (falls back to a color if absent)
 type Assets = {
   walls: Map<number, HTMLCanvasElement>; // wall texture pages, keyed by VSWAP page index
   sprites: Map<number, HTMLCanvasElement>;
@@ -330,7 +374,8 @@ async function loadAssets(): Promise<Assets | null> {
   // load only the wall texture pages this level actually uses (both faces per tile)
   const walls = new Map<number, HTMLCanvasElement>();
   const pages = new Set<number>([0, 1]);
-  for (const v of tiles) if (isSolid(v)) { pages.add(wallPage(v, true)); pages.add(wallPage(v, false)); }
+  for (const v of tiles) if (isWall(v)) { pages.add(wallPage(v, true)); pages.add(wallPage(v, false)); }
+  if (doorList.length) pages.add(DOOR_PAGE);
   for (const p of pages) {
     const c = await loadImg64(`/wolf/wall_${p3(p)}.png`);
     if (c) walls.set(p, c);
@@ -523,6 +568,10 @@ function drawGuard(px: number, py: number, pa: number, g: Guard, clock: number) 
 function renderView(s: State, clock: number, fx: Fx) {
   const px = toU(s.player.x), py = toU(s.player.y), pa = s.player.angle;
 
+  // refresh per-door open fractions (action 0 = DR_OPEN = fully open) for the raycaster
+  for (let i = 0; i < s.doors.length; i++)
+    doorOpenFrac[i] = s.doors[i].action === 0 ? 1 : s.doors[i].position / 0xffff;
+
   // ceiling + floor — Wolf3D draws these as flat colors, not textures:
   // floor is palette 0x19 (gray); E1 ceiling is palette 0x1d (dark gray), per vgaCeiling[].
   vctx.fillStyle = "#383838"; // ceiling (0x1d)
@@ -540,14 +589,21 @@ function renderView(s: State, clock: number, fx: Fx) {
     if (lineH > VH * 3) lineH = VH * 3;
     const top = VH / 2 - lineH / 2;
     const shade = Math.max(0.16, Math.min(1, 1.25 - perp / 760));
+    const door = isDoor(hit.tile);
     if (assets) {
       // real Wolf3D texture for this tile's value + face; blit a 1px source column
-      const tex = assets.walls.get(wallPage(hit.tile, hit.vertical)) ?? assets.walls.get(0)!;
+      const page = door ? DOOR_PAGE : wallPage(hit.tile, hit.vertical);
+      const tex = assets.walls.get(page) ?? assets.walls.get(0)!;
       const sx = Math.min(63, Math.max(0, Math.floor(hit.tex)));
       vctx.drawImage(tex, sx, 0, 1, 64, c, top, 1, lineH);
       let darkA = 1 - shade;
       if (!hit.vertical) darkA = Math.min(0.9, darkA + 0.22); // darken N/S faces
       if (darkA > 0.02) { vctx.fillStyle = `rgba(0,0,0,${darkA})`; vctx.fillRect(c, top, 1, lineH); }
+    } else if (door) {
+      const side = hit.vertical ? 1 : 0.74;
+      const r = (74 * shade * side) | 0, gg = (96 * shade * side) | 0, b = (132 * shade * side) | 0; // steel door
+      vctx.fillStyle = `rgb(${r},${gg},${b})`;
+      vctx.fillRect(c, top, 1, lineH);
     } else {
       const side = hit.vertical ? 1 : 0.74; // darken N/S faces for depth cue
       const r = (150 * shade * side) | 0, gg = (132 * shade * side) | 0, b = (108 * shade * side) | 0;
@@ -744,7 +800,11 @@ function renderMap(s: State) {
   const px0 = SC > 4 ? 1 : 0; // gridlines only when tiles are big enough
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
-      mctx.fillStyle = isSolid(tiles[y * W + x]) ? "#3a3a4a" : "#0c0c14";
+      const v = tiles[y * W + x];
+      // doors: brighter when closed, dim as they open
+      mctx.fillStyle = isDoor(v)
+        ? (doorOpenFrac[v & 0x7f] > 0.5 ? "#1d3a2a" : "#3aa06a")
+        : isWall(v) ? "#3a3a4a" : "#0c0c14";
       mctx.fillRect(x * SC, y * SC, SC - px0, SC - px0);
     }
   const px = (s.player.x / TILEGLOBAL) * SC, py = (s.player.y / TILEGLOBAL) * SC;
@@ -828,6 +888,7 @@ function cmd() {
     if (right) controlx = TURN;
   }
   if (keys.has(" ")) buttons |= 1; // BT_ATTACK
+  if (keys.has("e")) buttons |= 8; // BT_USE (open/close the door you face)
   return { controlx: BigInt(controlx), controly: BigInt(controly), buttons };
 }
 
@@ -847,7 +908,7 @@ async function main() {
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(),
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
-    guardsHex(),
+    guardsHex(), doorsHex(),
   ]);
   const session = await deploy(SessionA, [engine, map]);
 

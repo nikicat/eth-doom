@@ -31,9 +31,10 @@ pnpm dev          # http://localhost:5173
 ```
 
 Open the page: it auto-deploys to anvil and starts ticking. **WASD** move · **←/→** (or **A/D**)
-turn · hold **Shift** to strafe · **Space** to fire. Each step sends one `submitInput`; the world
-only advances when you act, so the guard keeps closing in. A render loop animates the gun / flashes
-smoothly between ticks (independent of tx latency).
+turn · hold **Shift** to strafe · **Space** to fire · **E** to open the door you face. Each step
+sends one `submitInput`; the world only advances when you act, so the guard keeps closing in. Doors
+slide open over the next several ticks (the on-chain `doorposition`) and you walk through once open. A
+render loop animates the gun / flashes smoothly between ticks (independent of tx latency).
 
 ## Authentic Wolfenstein art (optional)
 

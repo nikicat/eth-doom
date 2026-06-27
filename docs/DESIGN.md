@@ -26,24 +26,27 @@ Session  per-game packed world state                    raycaster view       gol
   transition: decode the world, run movement + every actor's `DoActor`, re-encode. Pure function of
   `(state, map, cmd)`, so it's exactly what the differential test targets. Helper libs: `Fixed`
   (16.16 + `FixedByFrac`), `Trig` (baked sin/cos), `Rng` (baked `rndtable`).
-- **`Map`** (immutable) — tilemap + guard spawn list. (Tiles in storage today; SSTORE2/`CODECOPY`
-  is the planned gas optimization.)
+- **`Map`** (immutable) — tilemap (door tiles encoded `doornum|0x80`) + guard spawn list + door list
+  (`tilex,tiley,vertical,lock` per door, in doornum order). The tilemap is stored **SSTORE2-style**
+  (a data contract's bytecode, read each tick via one `EXTCODECOPY`); guards/doors are in storage.
 - **`Session`** (stateful) — the single source of truth for a live game: holds the packed world
   state + immutable `engine`/`map` addresses. `engine`/`map` are immutable so a live game's rules can
   never change underneath it.
 
 ### Packed world state
 
-`Session.state` is `header · player word · one word per actor` (replacing an `abi.encode` blob —
-~40% gas cut). Bit layout (LSB first), kept in lockstep across `Engine.sol`, the harness, and the
-web decoder:
+`Session.state` is `header · player word · one word per door · one word per actor` (replacing an
+`abi.encode` blob — ~40% gas cut). Bit layout (LSB first), kept in lockstep across `Engine.sol`, the
+harness, and the web decoder:
 
-- **header**: `rndindex:uint8@0 | numactors:uint8@8`
+- **header**: `rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16`
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
-  tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160`
+  tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176`
+- **door**: `action:uint8@0 | ticcount:int16@16 | position:uint16@32` (the static tilex/tiley/
+  vertical/lock come from the `Map`, indexed by doornum = scan order)
 - **actor**: `x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88
   | ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 | obclass:uint8@168
-  | speed:int32@176 | active:uint8@208`
+  | speed:int32@176 | active:uint8@208 | temp2:int16@216`
 
 ## Methodology: faithful transliteration, validated by a C oracle
 
@@ -86,9 +89,13 @@ are deviations from id's *render-coupled* code, not between our two implementati
   renderer flips on when the actor is drawn. Headless, there's no renderer, so we process every
   actor every tic (like `FL_VISABLE`, an identical-on-both-sides choice). This is what lets a
   dormant guard run `T_Stand`/`SightPlayer` and wake on line-of-sight without screen activation.
-- **Single-area map, no doors (yet).** `areanumber`/`areabyplayer` connectivity is collapsed to a
-  single area; `CheckLine`'s door branch is dead code until M3 adds doors. One side effect: gunfire
-  (`madenoise`) alerts *all* guards, since everything is one area until doors localize sound.
+- **Doors without area connectivity.** Doors are faithful (open/close/slide/auto-close, block until
+  fully open, open on player Use / guard bump, gate LOS via `CheckLine`+`doorposition`) — but id's
+  `areaconnect`/`ConnectAreas` graph and `PlaySoundLocTile` are dropped: the map stays a single area
+  (`areabyplayer` all-true). So a closed door still *blocks* sight (the ray stops at it) but does not
+  *localize sound* — gunfire (`madenoise`) alerts every guard, not just those in connected areas.
+  Door-jamb side textures (`|0x40`) and the `actorat` adjacency checks in `CloseDoor`/`DoorClosing`
+  (no actor grid) are likewise dropped. Applied identically in the oracle and Solidity.
 - **No `actorat` grid yet.** Guards don't collide with each other (`TryWalk` checks walls only); with
   many guards in a real level this lets them overlap. Actor-vs-actor collision is still to come.
 

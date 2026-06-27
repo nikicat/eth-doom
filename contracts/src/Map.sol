@@ -16,6 +16,7 @@ contract Map is IMap {
     uint256 private immutable _spawnDir;
     address private immutable _tilesPtr; // data contract: STOP byte + w*h tile bytes
     bytes private _guards;
+    bytes private _doors;
 
     constructor(
         uint256 w,
@@ -24,10 +25,12 @@ contract Map is IMap {
         uint256 sx,
         uint256 sy,
         uint256 sdir,
-        bytes memory g
+        bytes memory g,
+        bytes memory d
     ) {
         require(t.length == w * h, "bad tiles length");
         require(g.length % 3 == 0, "bad guards length");
+        require(d.length % 3 == 0, "bad doors length");
         width = w;
         height = h;
         _spawnX = sx;
@@ -35,6 +38,7 @@ contract Map is IMap {
         _spawnDir = sdir;
         _tilesPtr = _sstore2(t);
         _guards = g;
+        _doors = d;
     }
 
     /// SSTORE2 write: deploy `data` as a contract's runtime code (1 STOP byte +
@@ -69,5 +73,9 @@ contract Map is IMap {
 
     function guards() external view returns (bytes memory) {
         return _guards;
+    }
+
+    function doors() external view returns (bytes memory) {
+        return _doors;
     }
 }

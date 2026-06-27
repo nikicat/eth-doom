@@ -117,6 +117,36 @@ const fn is_guard(t: u16) -> bool {
     matches!(t, 108..=115 | 144..=151 | 180..=187)
 }
 
+const AREATILE: u16 = 107;
+const AMBUSHTILE: u16 = 106;
+
+/// WL_GAME.C SetupGameLevel: turn raw plane-0 codes into the runtime tilemap the
+/// engine/client consume, and collect the door list (scan order = doornum).
+///   - 90..=101 door  -> tile = doornum|0x80 ; door = (x, y, vertical|lock<<1)
+///   - 1..<AREATILE   -> solid wall (keep the value; AMBUSHTILE clears to floor)
+///   - else (areas/0) -> floor (0)
+/// vertical/lock follow id's even=vertical/odd=horizontal door encoding.
+fn build_tilemap(plane0: &[u16], w: usize, h: usize) -> (Vec<u8>, Vec<[u8; 3]>) {
+    let mut tiles = vec![0u8; w * h];
+    let mut doors = Vec::new();
+    let mut doornum: u8 = 0;
+    for y in 0..h {
+        for x in 0..w {
+            let t = plane0[y * w + x];
+            if (90..=101).contains(&t) {
+                let vertical: u8 = if t % 2 == 0 { 1 } else { 0 };
+                let lock: u8 = if t % 2 == 0 { ((t - 90) / 2) as u8 } else { ((t - 91) / 2) as u8 };
+                tiles[y * w + x] = 0x80 | doornum;
+                doors.push([x as u8, y as u8, vertical | (lock << 1)]);
+                doornum += 1;
+            } else if t >= 1 && t < AREATILE && t != AMBUSHTILE {
+                tiles[y * w + x] = t as u8; // solid wall (texture = (t-1)*2)
+            }
+        }
+    }
+    (tiles, doors)
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let head = fs::read(&args.maphead)
@@ -161,6 +191,8 @@ fn main() -> Result<()> {
     }
     let (sx, sy, sdir) = spawn.ok_or_else(|| anyhow!("no player start (tiles 19-22) in plane 1"))?;
 
+    let (tiles, doors) = build_tilemap(&plane0, w, h);
+
     if args.ascii {
         for y in 0..h {
             let mut row = String::new();
@@ -171,6 +203,8 @@ fn main() -> Result<()> {
                     '@'
                 } else if is_guard(p1) {
                     'G'
+                } else if (90..=101).contains(&t) {
+                    'D'
                 } else if (1..90).contains(&t) {
                     '#'
                 } else {
@@ -185,16 +219,18 @@ fn main() -> Result<()> {
         "name": name,
         "w": w, "h": h,
         "spawn": { "x": sx, "y": sy, "dir": sdir },
-        "tiles": plane0,            // plane-0 values: wall if 1..=89, else floor (texture = (v-1)*2)
-        "guards": guards,           // [tilex, tiley] per guard
+        "tiles": tiles,             // runtime tilemap: 1..=89 wall (texture (v-1)*2), 0x80|n door, 0 floor
+        "guards": guards,           // [tilex, tiley, dir] per guard
+        "doors": doors,             // [tilex, tiley, vertical|lock<<1] per door, in doornum order
     });
     if let Some(dir) = args.out.parent() {
         fs::create_dir_all(dir)?;
     }
     fs::write(&args.out, serde_json::to_vec_pretty(&level)?)?;
     println!(
-        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards -> {}",
+        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors -> {}",
         guards.len(),
+        doors.len(),
         args.out.display()
     );
     Ok(())

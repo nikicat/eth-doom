@@ -29,6 +29,13 @@ static void emit(long tick)
         }
         printf("]");
     }
+    if (doornum > 0) {
+        printf(",\"doors\":[");
+        for (int i = 0; i < doornum; i++)
+            printf("%s{\"pos\":%u,\"act\":%d,\"tc\":%d}", i ? "," : "",
+                   doorposition[i], doorobjlist[i].action, doorobjlist[i].ticcount);
+        printf("]");
+    }
     printf("}\n");
 }
 
@@ -42,10 +49,16 @@ static void load_map(const char *path)
     if (fscanf(f, "%d %d\n", &w, &h) != 2 || w > MAPSIZE || h > MAPSIZE) {
         fprintf(stderr, "bad map header\n"); exit(1);
     }
+    InitDoorList();
     for (y = 0; y < h; y++) {
         if (!fgets(line, sizeof line, f)) { fprintf(stderr, "map too short\n"); exit(1); }
-        for (x = 0; x < w; x++)
-            tilemap[x][y] = (line[x] == '#') ? 1 : 0;
+        for (x = 0; x < w; x++) {
+            char c = line[x];
+            if (c == '#')      tilemap[x][y] = 1;              /* wall */
+            else if (c == 'D') SpawnDoor(x, y, 1, dr_normal);  /* vertical door */
+            else if (c == 'd') SpawnDoor(x, y, 0, dr_normal);  /* horizontal door */
+            else               tilemap[x][y] = 0;              /* floor */
+        }
     }
     fclose(f);
 }
@@ -104,9 +117,13 @@ int main(int argc, char **argv)
         for (int b = 0; b < NUMBUTTONS; b++)
             buttonstate[b] = (btns >> b) & 1;
 
+        /* WL_PLAY.C PlayLoop order: MoveDoors, then the player's T_Player
+         * (ControlMovement + Cmd_Use + weapon), then every actor's DoActor. */
+        MoveDoors();
         ControlMovement(player);
         plux = player->x >> UNSIGNEDSHIFT;
         pluy = player->y >> UNSIGNEDSHIFT;
+        Cmd_Use(btns);
         madenoise = 0;
         PlayerAttack(btns);
         for (int e = 0; e < numenemies; e++)

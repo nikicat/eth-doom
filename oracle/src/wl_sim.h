@@ -26,12 +26,19 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define PI            3.141592657     /* id's exact value — do not "fix" */
 #define MAPSIZE       64
 
+/* --- doors (WL_ACT1.C / WL_DEF.H) --- */
+#define MAXDOORS      64              /* a tilemap spot holds doornum in 6 bits */
+#define OPENTICS      300             /* DoorOpen auto-close delay */
+#define AREATILE      107             /* first floor/area tile (map semantics) */
+enum { dr_open, dr_closed, dr_opening, dr_closing };   /* doorobj_t.action */
+enum { dr_normal, dr_lock1, dr_lock2, dr_lock3, dr_lock4, dr_elevator }; /* lock */
+
 /* --- WL_AGENT.C movement scales --- */
 #define MOVESCALE      150L
 #define BACKMOVESCALE  100L
 #define ANGLESCALE     20
 
-/* buttons (WL_DEF.H enum). Only bt_strafe affects movement. */
+/* buttons (WL_DEF.H enum). bt_strafe affects movement; bt_use operates doors. */
 #define bt_attack 0
 #define bt_strafe 1
 #define bt_run    2
@@ -126,6 +133,27 @@ extern int buttonstate[NUMBUTTONS];
 extern int rndindex;
 void US_InitRndT(int randomize);
 int  US_RndT(void);
+
+/* --- doors (wl_actor.c) — WL_ACT1.C doorobj_t (area connectivity dropped: the
+ * single-area map keeps areabyplayer all-true, so doors block/slide and gate LOS
+ * via CheckLine + doorposition, but sound still crosses them). --- */
+typedef struct {
+    unsigned char tilex, tiley, vertical, lock;
+    int action;        /* dr_open / dr_closed / dr_opening / dr_closing */
+    int ticcount;      /* open-time accumulator (DoorOpen) */
+} doorobj_t;
+extern doorobj_t doorobjlist[MAXDOORS];
+extern int       doornum;                  /* number of doors spawned */
+extern unsigned  doorposition[MAXDOORS];   /* leading edge 0=closed..0xffff=open */
+extern int       useheld;                  /* buttonheld[bt_use] edge latch */
+
+void InitDoorList(void);
+void SpawnDoor(int tilex, int tiley, int vertical, int lock);
+void OpenDoor(int door);
+void CloseDoor(int door);
+void OperateDoor(int door);
+void MoveDoors(void);
+void Cmd_Use(int buttons);
 
 /* --- enemy actors (wl_actor.c) --- */
 #define MAXENEMIES 64

@@ -46,6 +46,7 @@ struct Snap {
     player: [i64; 9], // x,y,angle,tilex,tiley,anglefrac,health,ammo,acount
     rng: Option<i64>,
     guards: Vec<[i64; 7]>, // x,y,dir,st,hp,tc,dist
+    doors: Vec<[i64; 3]>,  // pos,act,tc
 }
 
 fn load_golden(path: &str) -> Result<Vec<Snap>> {
@@ -61,17 +62,28 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
                 guards.push([f("x"), f("y"), f("dir"), f("st"), f("hp"), f("tc"), f("dist")]);
             }
         }
+        let mut doors = Vec::new();
+        if let Some(arr) = v.get("doors").and_then(|x| x.as_array()) {
+            for dr in arr {
+                let f = |k: &str| dr[k].as_i64().unwrap();
+                doors.push([f("pos"), f("act"), f("tc")]);
+            }
+        }
         out.push(Snap {
             player: [g("x")?, g("y")?, g("angle")?, g("tilex")?, g("tiley")?, g("anglefrac")?, g("health")?, g("ammo")?, g("acount")?],
             rng: v.get("rng").and_then(|x| x.as_i64()),
             guards,
+            doors,
         });
     }
     Ok(out)
 }
 
-/// Parse "W H" + grid into row-major tiles: tile(x,y) = tiles[y*W + x], 1 = wall.
-fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>)> {
+/// Parse "W H" + grid into the runtime tilemap: tile(x,y) = tiles[y*W + x], 1 =
+/// wall, `doornum|0x80` = door, 0 = floor. Door chars match the oracle map loader
+/// ('D' vertical, 'd' horizontal, lock 0), with doornum in y-major scan order, and
+/// also returns the Map door bytes (3/door: tilex, tiley, vertical|lock<<1).
+fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>)> {
     let txt = fs::read_to_string(repo(path))?;
     let mut lines = txt.lines();
     let hdr = lines.next().ok_or_else(|| anyhow!("empty map"))?;
@@ -79,15 +91,26 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>)> {
     let w: u64 = it.next().unwrap().parse()?;
     let h: u64 = it.next().unwrap().parse()?;
     let mut tiles = vec![0u8; (w * h) as usize];
+    let mut doors = Vec::new();
+    let mut doornum: u8 = 0;
     for y in 0..h {
         let row = lines.next().ok_or_else(|| anyhow!("map too short"))?;
         let bytes = row.as_bytes();
         for x in 0..w {
             let c = *bytes.get(x as usize).unwrap_or(&b'.');
-            tiles[(y * w + x) as usize] = if c == b'#' { 1 } else { 0 };
+            match c {
+                b'#' => tiles[(y * w + x) as usize] = 1,
+                b'D' | b'd' => {
+                    let vertical: u8 = if c == b'D' { 1 } else { 0 };
+                    tiles[(y * w + x) as usize] = 0x80 | doornum;
+                    doors.extend_from_slice(&[x as u8, y as u8, vertical]); // lock 0
+                    doornum += 1;
+                }
+                _ => {}
+            }
         }
     }
-    Ok((w, h, tiles))
+    Ok((w, h, tiles, doors))
 }
 
 /// Parse "cx cy buttons" lines (skip blank / '#').
@@ -112,6 +135,7 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     let header = word(state, 0);
     let rnd = field(header, 0, 8) as i64;
     let n = field(header, 8, 8) as usize;
+    let nd = field(header, 16, 8) as usize;
 
     let pw = word(state, 1);
     let player = [
@@ -133,11 +157,24 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
             bail!("tic {tick} RNG mismatch: got {} want {}", rnd, wr);
         }
     }
+    // doors: nd words after the player word; check pos/act/tc against the golden
+    if nd != want.doors.len() {
+        bail!("tic {tick} door count: got {} want {}", nd, want.doors.len());
+    }
+    for k in 0..nd {
+        let dw = word(state, 2 + k);
+        // door word: action@0, ticcount@16, position@32  -> golden [pos, act, tc]
+        let got = [field(dw, 32, 16) as i64, field(dw, 0, 8) as i64, s16(dw, 16)];
+        if got != want.doors[k] {
+            bail!("tic {tick} DOOR{k} mismatch\n  got  {:?}\n  want {:?}", got, want.doors[k]);
+        }
+    }
+
     if n != want.guards.len() {
         bail!("tic {tick} guard count: got {} want {}", n, want.guards.len());
     }
     for k in 0..n {
-        let aw = word(state, 2 + k);
+        let aw = word(state, 2 + nd + k);
         // golden guard order: x, y, dir, state, hp, ticcount, distance
         let got = [
             s32(aw, 0),
@@ -168,10 +205,14 @@ async fn main() -> Result<()> {
          "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 2]),
         ("kill_guard", "oracle/maps/test_room.txt", "vectors/kill_guard.input.txt",
          "vectors/kill_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2]),
+        ("door_use", "oracle/maps/door_room.txt", "vectors/door_use.input.txt",
+         "vectors/door_use.golden.jsonl", (4, 8, 1), vec![]),
+        ("door_guard", "oracle/maps/door_room.txt", "vectors/door_guard.input.txt",
+         "vectors/door_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2]),
     ];
 
     for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {
-        let (w, h, tiles) = load_map(mapf)?;
+        let (w, h, tiles, doors) = load_map(mapf)?;
         let inputs = load_inputs(inf)?;
         let golden = load_golden(goldf)?;
 
@@ -180,6 +221,7 @@ async fn main() -> Result<()> {
             U256::from(w), U256::from(h), Bytes::from(tiles),
             U256::from(*sx), U256::from(*sy), U256::from(*sdir),
             Bytes::from(guards.clone()),
+            Bytes::from(doors),
         ).await?;
         let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address()).await?;
 
