@@ -34,7 +34,9 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   sim one `submitInput` tx per step, and renders the decoded on-chain state: a raycaster wall view
   (DDA adapted from 3DSage's MIT raycaster), guards as depth-buffered sprite columns, a pistol
   viewmodel + muzzle/damage flashes, a Wolfenstein-style HUD (health/ammo/face + live gas/input),
-  and a minimap. WASD/arrows move, Shift strafes, Space fires. No game logic client-side.
+  and a minimap. WASD/arrows move, Shift strafes, Space fires. No game logic client-side. The
+  client **owns the session and delegates an ephemeral burner key once**, then auto-signs every
+  `submitInput` with it — popup-free play, no wallet prompt per tick (the HUD shows `owner → key`).
 - **Authentic id art + the real first level, runtime-loaded** — `scripts/fetch-shareware.sh` downloads
   the freely-distributable Wolf3D shareware and the Rust extractors decode it: `wl-extract` does
   **VSWAP** → wall textures + guard sprites + the player pistol and **VGAGRAPH** (Huffman + VGA-planar)
@@ -56,7 +58,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
 | **M3** world completeness | ✅ | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (4-shot burst, 100 HP) ✅; **dog** (melee, 1 HP) ✅; **officer** (speed ×5, 50 HP) ✅ — full E1 roster; **`SessionFactory`** (many games, one engine/map) ✅ |
-| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; next: web burner/auto-sign UX, MegaETH deploy (needs RPC + funded key), WASM Wolf3D-port renderer + client prediction |
+| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; **web burner/auto-sign UX** — the client owns the session, delegates an ephemeral burner once, and auto-signs every tick with it (no popup per input) ✅; next: MegaETH deploy (needs RPC + funded key), WASM Wolf3D-port renderer + client prediction |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
 

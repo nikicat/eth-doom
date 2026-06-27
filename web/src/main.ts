@@ -3,10 +3,11 @@ import {
   createPublicClient,
   http,
   bytesToHex,
+  parseEther,
   type Address,
   type Hex,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { foundry } from "viem/chains";
 
 // forge artifacts (abi + creation bytecode)
@@ -930,12 +931,17 @@ function renderMap(s: State) {
   mctx.fill();
 }
 
+// short "owner → burner" label for the HUD; set once the session key is delegated
+let sessionKeyLabel = "—";
+const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+
 function renderDbg(s: State, tick: number, gas: number | null) {
   const g0 = s.guards[0];
   dbg.textContent =
     `level     ${levelName} ${W}x${H}\n` +
     `tick      ${tick}\n` +
     `gas/tick  ${gas != null ? `${(gas / 1000).toFixed(0)}k (${gas.toLocaleString("en-US")})` : "—"}\n` +
+    `signer    ${sessionKeyLabel}\n` +
     `art       ${assets ? "real id (VSWAP)" : "procedural"}\n` +
     `guards    ${s.guards.length}\n` +
     `rndindex  ${s.rndindex}\n\n` +
@@ -1008,10 +1014,32 @@ async function main() {
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
     guardsHex(), doorsHex(), itemsHex(),
   ]);
-  // owner = our dev account; the same key both owns and submits here, so play works
-  // popup-free without a burner. (The burner + delegate() session-key flow is the next
-  // web task; the contract already enforces owner/session-key auth.)
+  // owner = our dev account (the "main wallet"). It signs exactly once below to
+  // delegate a session key; from then on the burner signs every tick.
   const session = await deploy(SessionA, [engine, map, account.address]);
+
+  // --- session key (M4): popup-free play ---------------------------------------
+  // Generate an ephemeral burner keypair in the browser, fund it for gas, and have
+  // the owner authorize it once via delegate(). The burner then auto-signs every
+  // submitInput with no further wallet touches — the standard FOCG pattern. On a real
+  // chain the funding is a dust pre-fund (or an ERC-4337 paymaster) and delegate() is
+  // the one MetaMask popup; here both keys are local anvil accounts.
+  const burner = privateKeyToAccount(generatePrivateKey());
+  const burnerWallet = createWalletClient({ account: burner, chain: foundry, transport });
+  const expiry = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour, time-boxed
+  // fund the burner so it can pay its own gas
+  await pub.waitForTransactionReceipt({
+    hash: await wallet.sendTransaction({ to: burner.address, value: parseEther("10") }),
+  });
+  // the single owner signature that authorizes the burner for this Session
+  await pub.waitForTransactionReceipt({
+    hash: await wallet.writeContract({
+      address: session, abi: SessionA.abi, functionName: "delegate",
+      args: [burner.address, expiry],
+    }),
+  });
+  sessionKeyLabel = `${shortAddr(account.address)} → ${shortAddr(burner.address)} (key)`;
+  console.log(`[session key] owner ${account.address} delegated burner ${burner.address} until ${expiry}`);
 
   latest = decode(
     (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex,
@@ -1031,10 +1059,12 @@ async function main() {
   }
   requestAnimationFrame(frame);
 
-  // tx loop — one submitInput per step; world only advances when we act
+  // tx loop — one submitInput per step; world only advances when we act. Signed by
+  // the BURNER (session key), so no wallet popup per tick. (On a low-latency chain
+  // we'd track the nonce locally and not await each receipt; anvil mines instantly.)
   for (;;) {
     const before = latest!;
-    const hash = await wallet.writeContract({
+    const hash = await burnerWallet.writeContract({
       address: session,
       abi: SessionA.abi,
       functionName: "submitInput",
