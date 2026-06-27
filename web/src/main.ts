@@ -324,7 +324,23 @@ function decode(hex: string): State {
 // guard state IDs (gstates[] order in wl_actor.c)
 const S_STAND = 0, S_CHASE1 = 1, S_CHASE4 = 6, S_SHOOT1 = 7, S_SHOOT3 = 9;
 const S_DIE1 = 10, S_DIE4 = 13, S_PAIN = 14, S_PAIN1 = 15;
-const OFFICEROBJ = 4, SSOBJ = 5, DOGOBJ = 6; // obclass values
+const GUARDOBJ = 3, OFFICEROBJ = 4, SSOBJ = 5, DOGOBJ = 6; // obclass values (id's classtype enum)
+
+// M5.3: per-class enemy sprite frame tables — absolute VSWAP sprite indices read from id's
+// WL_DEF.H sprite enum. Shareware = non-SPEAR build (48 statics), so SPR_GRD_S_1 = 50. Each
+// class: stand (8 rotations; the dog has no stand frames → reuses its walk frame), walk
+// (4 frames × 8 rotations), shoot (the dog's is the JUMP/bite frames), pain 1/2, the die
+// sequence (canonical DIE_1..), and the dead corpse. The officer and mutant aren't episode-1
+// enemies, so their VSWAP pages are sparse in the shareware — officer frames fall back to the
+// real guard sprite at draw time (registered .WL6 data carries them and they load on their own).
+type EnemyFrames = { stand: number; walk: number; shoot: number; pain1: number; pain2: number; die: number[]; dead: number };
+const NF = -1; // frame not present for this class
+const ENEMY_FRAMES: Record<number, EnemyFrames> = {
+  [GUARDOBJ]:   { stand: 50,  walk: 58,  shoot: 96,  pain1: 90,  pain2: 94,  die: [91, 92, 93],         dead: 95 },
+  [DOGOBJ]:     { stand: NF,  walk: 99,  shoot: 135, pain1: NF,  pain2: NF,  die: [131, 132, 133],      dead: 134 },
+  [SSOBJ]:      { stand: 138, walk: 146, shoot: 184, pain1: 178, pain2: 182, die: [179, 180, 181],      dead: 183 },
+  [OFFICEROBJ]: { stand: 238, walk: 246, shoot: 285, pain1: 278, pain2: 282, die: [279, 280, 281, 283], dead: 284 },
+};
 // SS (16..37), dog (38..53) and officer (54..70) states mirror the guard graph;
 // fold them onto the guard state ids for rendering/category checks.
 function rs(s: number): number {
@@ -558,11 +574,20 @@ async function loadAssets(): Promise<Assets | null> {
   if (walls.size === 0) return null;
   const sprites = new Map<number, HTMLCanvasElement>();
   const need = [PISTOL_READY, ...PISTOL_FIRE]; // player pistol
-  for (let i = 50; i <= 98; i++) need.push(i); // guard frames: SPR_GRD_S_1=50 … SPR_GRD_SHOOT3=98
-  for (const i of need) {
-    const c = await loadImg64(`/wolf/sprite_${p3(i)}.png`);
-    if (c) sprites.set(i, c);
+  // every enemy class's frames (guard/dog/SS/officer) derived from the per-class tables;
+  // absent pages (officer/mutant aren't in shareware) 404 → skipped. Loaded in parallel.
+  for (const f of Object.values(ENEMY_FRAMES)) {
+    if (f.stand >= 0) for (let i = 0; i < 8; i++) need.push(f.stand + i);
+    for (let i = 0; i < 32; i++) need.push(f.walk + i);
+    for (let i = 0; i < 3; i++) need.push(f.shoot + i);
+    if (f.pain1 >= 0) need.push(f.pain1);
+    if (f.pain2 >= 0) need.push(f.pain2);
+    for (const d of f.die) need.push(d);
+    need.push(f.dead);
   }
+  const uniq = [...new Set(need)];
+  const loaded = await Promise.all(uniq.map((i) => loadImg64(`/wolf/sprite_${p3(i)}.png`)));
+  uniq.forEach((i, k) => { if (loaded[k]) sprites.set(i, loaded[k]!); });
   // HUD pics: status bar + digits (105–114) + BJ faces (115–138)
   const pics = new Map<number, HTMLCanvasElement>();
   const picIds = [PIC_STATUSBAR];
@@ -583,15 +608,16 @@ function calcRotate(g: Guard, angTo: number): number {
   a = ((a % 360) + 360) % 360;
   return Math.floor(a / 45) & 7;
 }
-function guardSprite(g: Guard, angTo: number): number {
-  const s = rs(g.state); // SS folds onto the guard frames (tinted blue at draw time)
-  if (isFiring(s)) return 96 + (s - S_SHOOT1); // SHOOT1..3 = 96..98
-  if (isPain(s)) return s === S_PAIN ? 90 : 94; // PAIN_1=90, PAIN_2=94
-  if (isDead(s)) { const k = s - S_DIE1; return k < 3 ? 91 + k : 95; } // DIE_1..3=91..93, DEAD=95
+function enemySprite(obclass: number, g: Guard, angTo: number): number {
+  const f = ENEMY_FRAMES[obclass] ?? ENEMY_FRAMES[GUARDOBJ];
+  const s = rs(g.state); // rs() folds each class's state graph onto the canonical guard ids
+  if (isFiring(s)) return f.shoot + (s - S_SHOOT1); // SHOOT1..3 (dog: JUMP, rs folds bite→SHOOT1)
+  if (isPain(s)) { const p = s === S_PAIN ? f.pain1 : f.pain2; return p >= 0 ? p : f.walk; }
+  if (isDead(s)) { const k = s - S_DIE1; return k < f.die.length ? f.die[k] : f.dead; }
   const rot = calcRotate(g, angTo);
-  if (s === S_STAND) return 50 + rot; // SPR_GRD_S_1=50 (8 rotations)
+  if (s === S_STAND) return (f.stand >= 0 ? f.stand : f.walk) + rot; // dog has no stand → W1
   const wf = [0, 0, 1, 2, 2, 3][s - S_CHASE1] ?? 0; // chase1,1s,2,3,3s,4 → walk W1..W4
-  return 58 + wf * 8 + rot; // SPR_GRD_W1_1=58
+  return f.walk + wf * 8 + rot;
 }
 
 /** Draw a guard using a real Wolf3D sprite frame, depth-tested per column. */
@@ -604,8 +630,12 @@ function drawGuardSprite(px: number, py: number, pa: number, g: Guard, clock: nu
   if (Math.abs(rel) > FOV / 2 + 30) return;
   const perp = dist * Math.cos(rel * DR);
   if (perp < 1) return;
-  const img = A.sprites.get(guardSprite(g, angTo));
-  if (!img) { drawGuard(px, py, pa, g, clock); return; } // missing frame → procedural
+  // real per-class frame; if it's absent (officer art isn't in the shareware VSWAP) fall
+  // back to the real guard sprite, then to procedural — so an officer still renders as a
+  // Wolf3D soldier rather than a colored box.
+  let img = A.sprites.get(enemySprite(g.obclass, g, angTo));
+  if (!img && g.obclass !== GUARDOBJ) img = A.sprites.get(enemySprite(GUARDOBJ, g, angTo));
+  if (!img) { drawGuard(px, py, pa, g, clock); return; } // still missing → procedural
 
   const cx = VW / 2 - (rel / (FOV / 2)) * (VW / 2);
   const wallH = (U / perp) * PROJ;
