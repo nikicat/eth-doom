@@ -173,23 +173,24 @@ function decode(hex: string): State {
   const w = words(hex);
   const header = w[0];
   const n = fld(header, 8, 8);
-  const nd = fld(header, 16, 8);
+  const ad = fld(header, 16, 8); // active (non-closed) doors stored
   const ni = fld(header, 24, 16);
   const iw = ni === 0 ? 0 : Math.ceil(ni / 256);
   const pw = w[1];
-  const doors: Door[] = [];
-  for (let i = 0; i < nd; i++) {
-    const d = w[2 + i]; // door word: action@0, ticcount@16, position@32
-    doors.push({ action: fld(d, 0, 8), position: fld(d, 32, 16) });
+  // every door defaults closed; apply the stored active words by their doornum
+  const doors: Door[] = Array.from({ length: doorList.length }, () => ({ action: 1, position: 0 }));
+  for (let i = 0; i < ad; i++) {
+    const d = w[2 + i]; // door word: action@0, ticcount@16, position@32, doornum@48
+    doors[fld(d, 48, 8)] = { action: fld(d, 0, 8), position: fld(d, 32, 16) };
   }
-  const itemsTaken: boolean[] = []; // bitmask words after the doors
+  const itemsTaken: boolean[] = []; // bitmask words after the active doors
   for (let i = 0; i < ni; i++) {
-    const bits = w[2 + nd + Math.floor(i / 256)];
+    const bits = w[2 + ad + Math.floor(i / 256)];
     itemsTaken.push(((bits >> BigInt(i % 256)) & 1n) === 1n);
   }
   const guards: Guard[] = [];
   for (let i = 0; i < n; i++) {
-    const a = w[2 + nd + iw + i];
+    const a = w[2 + ad + iw + i];
     guards.push({
       x: sfld(a, 0, 32),
       y: sfld(a, 32, 32),

@@ -154,7 +154,7 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     let header = word(state, 0);
     let rnd = field(header, 0, 8) as i64;
     let n = field(header, 8, 8) as usize;
-    let nd = field(header, 16, 8) as usize;
+    let ad = field(header, 16, 8) as usize; // active (non-closed) doors stored
     let ni = field(header, 24, 16) as usize;
     let iw = if ni == 0 { 0 } else { (ni + 255) / 256 };
 
@@ -183,24 +183,28 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
             bail!("tic {tick} RNG mismatch: got {} want {}", rnd, wr);
         }
     }
-    // doors: nd words after the player word; check pos/act/tc against the golden
-    if nd != want.doors.len() {
-        bail!("tic {tick} door count: got {} want {}", nd, want.doors.len());
-    }
-    for k in 0..nd {
+    // doors: only the `ad` non-closed doors are stored (each carries its doornum).
+    // Reconstruct the full set: default every door closed [pos 0, act 1, tc 0], apply
+    // the active words by doornum, then check against the golden (which has all doors).
+    let total_doors = want.doors.len();
+    let mut doors = vec![[0i64, 1, 0]; total_doors]; // DR_CLOSED = 1
+    for k in 0..ad {
         let dw = word(state, 2 + k);
-        // door word: action@0, ticcount@16, position@32  -> golden [pos, act, tc]
-        let got = [field(dw, 32, 16) as i64, field(dw, 0, 8) as i64, s16(dw, 16)];
-        if got != want.doors[k] {
-            bail!("tic {tick} DOOR{k} mismatch\n  got  {:?}\n  want {:?}", got, want.doors[k]);
+        // door word: action@0, ticcount@16, position@32, doornum@48 -> golden [pos, act, tc]
+        let doornum = field(dw, 48, 8) as usize;
+        doors[doornum] = [field(dw, 32, 16) as i64, field(dw, 0, 8) as i64, s16(dw, 16)];
+    }
+    for k in 0..total_doors {
+        if doors[k] != want.doors[k] {
+            bail!("tic {tick} DOOR{k} mismatch\n  got  {:?}\n  want {:?}", doors[k], want.doors[k]);
         }
     }
-    // items: iw bitmask words after the doors; bit i = item i taken
+    // items: iw bitmask words after the active doors; bit i = item i taken
     if ni != want.items.len() {
         bail!("tic {tick} item count: got {} want {}", ni, want.items.len());
     }
     for k in 0..ni {
-        let bits = word(state, 2 + nd + k / 256);
+        let bits = word(state, 2 + ad + k / 256);
         let taken = field(bits, k % 256, 1) as i64;
         if taken != want.items[k] {
             bail!("tic {tick} ITEM{k} taken: got {} want {}", taken, want.items[k]);
@@ -211,7 +215,7 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
         bail!("tic {tick} guard count: got {} want {}", n, want.guards.len());
     }
     for k in 0..n {
-        let aw = word(state, 2 + nd + iw + k);
+        let aw = word(state, 2 + ad + iw + k);
         // golden guard order: x, y, dir, state, hp, ticcount, distance
         let got = [
             s32(aw, 0),

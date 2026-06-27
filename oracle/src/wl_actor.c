@@ -387,6 +387,11 @@ static void DoorClosing(int door) {
     if (position <= 0) {
         position = 0;
         doorobjlist[door].action = dr_closed;   /* (area disconnect dropped) */
+        doorobjlist[door].ticcount = 0;         /* normalize: a closed door is all-zero
+                                                 * dynamic state (lets the packed state drop
+                                                 * it). ticcount is never read while closed
+                                                 * (reset again on the next open), so this is
+                                                 * determinism-neutral, applied on both sides. */
     }
     doorposition[door] = position;
 }

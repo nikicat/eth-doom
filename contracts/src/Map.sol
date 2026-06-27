@@ -15,9 +15,9 @@ contract Map is IMap {
     uint256 private immutable _spawnY;
     uint256 private immutable _spawnDir;
     address private immutable _tilesPtr; // data contract: STOP byte + w*h tile bytes
+    address private immutable _doorsPtr; // STOP byte + 3 bytes/door (read each tick)
+    address private immutable _itemsPtr; // STOP byte + 3 bytes/item (read each tick)
     bytes private _guards;
-    bytes private _doors;
-    bytes private _items;
 
     constructor(
         uint256 w,
@@ -40,9 +40,9 @@ contract Map is IMap {
         _spawnY = sy;
         _spawnDir = sdir;
         _tilesPtr = _sstore2(t);
+        _doorsPtr = _sstore2(d); // SSTORE2: doors/items are read every tick, like tiles
+        _itemsPtr = _sstore2(it);
         _guards = g;
-        _doors = d;
-        _items = it;
     }
 
     /// SSTORE2 write: deploy `data` as a contract's runtime code (1 STOP byte +
@@ -59,6 +59,26 @@ contract Map is IMap {
 
     function tilesPtr() external view returns (address) {
         return _tilesPtr;
+    }
+
+    function doorsPtr() external view returns (address) {
+        return _doorsPtr;
+    }
+
+    function itemsPtr() external view returns (address) {
+        return _itemsPtr;
+    }
+
+    /// Copy an SSTORE2 blob out of a data contract (skip the leading STOP byte).
+    function _readPtr(address p) private view returns (bytes memory out) {
+        uint256 n;
+        assembly {
+            n := sub(extcodesize(p), 1)
+        }
+        out = new bytes(n);
+        assembly {
+            extcodecopy(p, add(out, 0x20), 1, n)
+        }
     }
 
     /// Backward-compatible view: copy the whole tilemap out of the data contract.
@@ -80,10 +100,10 @@ contract Map is IMap {
     }
 
     function doors() external view returns (bytes memory) {
-        return _doors;
+        return _readPtr(_doorsPtr);
     }
 
     function items() external view returns (bytes memory) {
-        return _items;
+        return _readPtr(_itemsPtr);
     }
 }

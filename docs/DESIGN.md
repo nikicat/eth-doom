@@ -40,12 +40,14 @@ Session  per-game packed world state                    raycaster view       gol
 (replacing an `abi.encode` blob — ~40% gas cut). Bit layout (LSB first), kept in lockstep across
 `Engine.sol`, the harness, and the web decoder:
 
-- **header**: `rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16 | numitems:uint16@24`
+- **header**: `rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24`
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
   tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176 |
   keys:uint8@184 | score:uint32@192`
-- **door**: `action:uint8@0 | ticcount:int16@16 | position:uint16@32` (the static tilex/tiley/
-  vertical/lock come from the `Map`, indexed by doornum = scan order)
+- **door** (sparse — only non-closed doors get a word): `action:uint8@0 | ticcount:int16@16 |
+  position:uint16@32 | doornum:uint8@48`. A closed door is the all-zero default the engine
+  reconstructs, so on a level of mostly-shut doors the blob carries almost none. Static tilex/tiley/
+  vertical/lock come from the `Map`, indexed by doornum = scan order.
 - **items**: `ceil(numitems/256)` words; bit *i* = item *i* taken (the static tilex/tiley/itemnumber
   come from the `Map`). The dynamic per-item state is one bit, so the whole list packs into ~one word.
 - **actor**: `x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88

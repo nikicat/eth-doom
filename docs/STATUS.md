@@ -60,17 +60,20 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | `move_basic` | movement only | 60.3k | 65.1k | 80.6k |
 | `chase_guard` | guard chases + shoots you (151 tics) | 66.9k | 72.3k | 92.3k |
 | `kill_guard` | you fire + kill the guard (81 tics) | 67.1k | 70.0k | 100.4k |
-| `door_use` | walk up to a door, Use it, pass through (151 tics) | 73.3k | 76.6k | 90.4k |
-| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 76.2k | 82.2k | 106.6k |
-| `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 89.1k | 96.4k | 123.6k |
+| `door_use` | walk up to a door, Use it, pass through (151 tics) | 71.4k | 77.6k | 118.0k |
+| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 74.3k | 81.6k | 108.8k |
+| `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 89.7k | 97.0k | 124.2k |
 
 `submitInput` gas is the true per-input cost a player pays — ~65–125k with a live guard + door + items
-on the 16×16 test map, a fraction of a cent on a cheap L2. The tilemap is stored **SSTORE2-style** (a
-data contract's bytecode, read each tick with one `EXTCODECOPY`), removing ~128 cold `SLOAD`s/tick
-(~270k) on the 64×64 level. A full E1L1 tick (12 guards, 22 doors, 48 items) is now ~397k: each door
-adds ~2.8k and each item ~2.4k (packed dynamic word/bit + the per-tick `MoveDoors`/`GetBonus` scans +
-`Map.doors()`/`Map.items()` storage reads). **Next gas lever:** move doors/items to SSTORE2 like the
-tilemap and skip the per-tick scans when nothing's near the player.
+on the 16×16 test map, a fraction of a cent on a cheap L2. Map data is stored **SSTORE2-style** (a data
+contract's bytecode, read each tick with one `EXTCODECOPY`): the tilemap (removing ~128 cold
+`SLOAD`s/tick, ~270k on the 64×64 level) and the door/item lists. The dominant remaining cost is the
+`Session` rewriting its full packed state every tick (≈3–5k/word: a cold `SLOAD` + a warm `SSTORE` per
+32-byte word), so **state size is the gas driver**. Two wins keep it down: doors are **sparse** (only
+the non-closed ones get a word — a closed door is the all-zero default the engine reconstructs), and
+items pack their taken bits into ~one word. A full idle E1L1 tick (12 guards, 22 doors, 48 items) is
+**~324k** (was ~397k before these); each *open* door adds ~5k back. **Next levers:** cap/cull live
+actors (corpses linger) and a tighter actor word.
 
 ## How it's verified
 
@@ -98,5 +101,7 @@ anvil --silent &
 - **M3**: dormant guards + line-of-sight ✅, doors ✅, pickups ✅ (ammo/health/keys/treasure, keys
   unlock doors; differential-verified `item_pickup`); next: other enemy types (dog/SS/officer),
   actor-vs-actor `actorat` collision, `SessionFactory`.
-- **Gas**: move doors/items to SSTORE2 (like the tilemap) and gate the per-tick scans on proximity.
+- **Gas**: doors/items now SSTORE2-stored, door state is sparse (closed doors cost nothing) →
+  E1L1 ~397k → ~324k. Remaining levers: cull dead actors (corpses linger in the state) + a tighter
+  actor word.
 - **M4**: MegaETH deploy (plain redeploy), popup-free play via session keys, first-person renderer.

@@ -236,8 +236,9 @@ contract Engine {
 
         // doors: static fields from the Map (3 bytes each: tilex, tiley,
         // vertical|lock<<1), in scan order = doornum. Dynamic fields default to
-        // fully closed; tick() overwrites them from the packed state.
-        bytes memory dd = IMap(map).doors();
+        // fully closed; tick() overwrites them from the packed state. Read SSTORE2-
+        // style (one EXTCODECOPY) rather than an abi-encoded storage `bytes` return.
+        bytes memory dd = _readPtr(IMap(map).doorsPtr());
         uint256 nd = dd.length / 3;
         wd.doors = new Door[](nd);
         for (uint256 i = 0; i < nd; i++) {
@@ -254,7 +255,7 @@ contract Engine {
 
         // bonus items: static fields from the Map (3 bytes each: tilex, tiley,
         // itemnumber). `taken` defaults false; tick() overwrites from the state.
-        bytes memory it = IMap(map).items();
+        bytes memory it = _readPtr(IMap(map).itemsPtr());
         uint256 ni = it.length / 3;
         wd.items = new Item[](ni);
         for (uint256 i = 0; i < ni; i++) {
@@ -263,6 +264,19 @@ contract Engine {
             item.tiley = uint8(it[i * 3 + 1]);
             item.itemnumber = uint8(it[i * 3 + 2]);
             item.taken = 0;
+        }
+    }
+
+    /// Copy an SSTORE2 blob out of a data contract via one EXTCODECOPY (the first
+    /// byte is a STOP guard; extcodesize-1 is the data length).
+    function _readPtr(address p) internal view returns (bytes memory out) {
+        uint256 n;
+        assembly {
+            n := sub(extcodesize(p), 1)
+        }
+        out = new bytes(n);
+        assembly {
+            extcodecopy(p, add(out, 0x20), 1, n)
         }
     }
 
@@ -448,6 +462,7 @@ contract Engine {
         if (position <= 0) {
             position = 0;
             door.action = DR_CLOSED;
+            door.ticcount = 0; // normalize a closed door to all-zero (see oracle note)
         }
         door.position = position;
     }
@@ -1143,36 +1158,45 @@ contract Engine {
         return v < 0 ? -v : v;
     }
 
-    // ------- state codec: header + player + 1 word/door + item-taken bitmask + 1 word/actor -------
-    // header: rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16 | numitems:uint16@24
+    // --- state codec: header + player + active-door words + item bitmask + actor words ---
+    // header: rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24
     // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
     //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 |
     //         useheld:bit@176 | keys:uint8@184 | score:uint32@192
-    // door:   action:uint8@0 | ticcount:int16@16 | position:uint16@32
+    // door:   action:uint8@0 | ticcount:int16@16 | position:uint16@32 | doornum:uint8@48
+    //         (ONLY non-closed doors are stored; a closed door is the all-zero default that
+    //          _load reconstructs. Decoders default every door closed, then apply these by doornum.)
     // items:  ceil(numitems/256) words, bit i = item i taken (static tilex/tiley/itemnumber from Map)
     // actor:  x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88 |
     //         ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 |
     //         obclass:uint8@168 | speed:int32@176 | active:uint8@208 | temp2:int16@216
-    // blob order: [header][player][door_0..][itemword_0..][actor_0..]
+    // blob order: [header][player][activedoor_0..][itemword_0..][actor_0..]
 
     function _pack(World memory wd) internal pure returns (bytes memory out) {
         uint256 nd = wd.doors.length;
         uint256 ni = wd.items.length;
         uint256 na = wd.actors.length;
         uint256 iw = ni == 0 ? 0 : (ni + 255) / 256;
-        out = new bytes(32 * (2 + nd + iw + na));
+        uint256 ad = 0; // active (non-closed) doors — the only ones we store
+        for (uint256 i = 0; i < nd; i++) {
+            if (wd.doors[i].action != DR_CLOSED) ad++;
+        }
+        out = new bytes(32 * (2 + ad + iw + na));
         uint256 header =
-            (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((nd & 0xff) << 16) | ((ni & 0xffff) << 24);
+            (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((ad & 0xff) << 16) | ((ni & 0xffff) << 24);
         uint256 pw = _packPlayer(wd.p);
         assembly {
             mstore(add(out, 0x20), header)
             mstore(add(out, 0x40), pw)
         }
+        uint256 slot = 0;
         for (uint256 i = 0; i < nd; i++) {
-            uint256 dw = _packDoor(wd.doors[i]);
+            if (wd.doors[i].action == DR_CLOSED) continue;
+            uint256 dw = _packDoor(wd.doors[i], i);
             assembly {
-                mstore(add(add(out, 0x60), mul(i, 0x20)), dw)
+                mstore(add(add(out, 0x60), mul(slot, 0x20)), dw)
             }
+            slot++;
         }
         for (uint256 wIdx = 0; wIdx < iw; wIdx++) {
             uint256 bits;
@@ -1182,19 +1206,20 @@ contract Engine {
                 if (wd.items[idx].taken != 0) bits |= (uint256(1) << bb);
             }
             assembly {
-                mstore(add(add(out, 0x60), mul(add(nd, wIdx), 0x20)), bits)
+                mstore(add(add(out, 0x60), mul(add(ad, wIdx), 0x20)), bits)
             }
         }
         for (uint256 i = 0; i < na; i++) {
             uint256 aw = _packActor(wd.actors[i]);
             assembly {
-                mstore(add(add(out, 0x60), mul(add(add(nd, iw), i), 0x20)), aw)
+                mstore(add(add(out, 0x60), mul(add(add(ad, iw), i), 0x20)), aw)
             }
         }
     }
 
-    /// Fills wd.p, wd.actors, wd.rndindex, the dynamic door fields, and item-taken
-    /// bits onto wd.doors/wd.items (whose static fields _load set from the Map).
+    /// Fills wd.p, wd.actors, wd.rndindex, the active door states (by doornum), and
+    /// item-taken bits onto wd.doors/wd.items (whose static fields _load set from the Map;
+    /// doors not present here stay closed, the default _load applied).
     function _unpack(bytes calldata b, World memory wd) internal pure {
         uint256 header;
         uint256 pw;
@@ -1204,21 +1229,21 @@ contract Engine {
         }
         wd.rndindex = header & 0xff;
         uint256 na = (header >> 8) & 0xff;
-        uint256 nd = (header >> 16) & 0xff;
+        uint256 ad = (header >> 16) & 0xff; // active (non-closed) door count
         uint256 ni = (header >> 24) & 0xffff;
         uint256 iw = ni == 0 ? 0 : (ni + 255) / 256;
         wd.p = _unpackPlayer(pw);
-        for (uint256 i = 0; i < nd; i++) {
+        for (uint256 i = 0; i < ad; i++) {
             uint256 dw;
             assembly {
                 dw := calldataload(add(b.offset, add(0x40, mul(i, 0x20))))
             }
-            _unpackDoorInto(wd.doors[i], dw);
+            _unpackDoorInto(wd.doors[(dw >> 48) & 0xff], dw); // doornum from bits 48..55
         }
         for (uint256 wIdx = 0; wIdx < iw; wIdx++) {
             uint256 bits;
             assembly {
-                bits := calldataload(add(b.offset, add(0x40, mul(add(nd, wIdx), 0x20))))
+                bits := calldataload(add(b.offset, add(0x40, mul(add(ad, wIdx), 0x20))))
             }
             for (uint256 bb = 0; bb < 256; bb++) {
                 uint256 idx = wIdx * 256 + bb;
@@ -1230,16 +1255,17 @@ contract Engine {
         for (uint256 i = 0; i < na; i++) {
             uint256 aw;
             assembly {
-                aw := calldataload(add(b.offset, add(0x40, mul(add(add(nd, iw), i), 0x20))))
+                aw := calldataload(add(b.offset, add(0x40, mul(add(add(ad, iw), i), 0x20))))
             }
             wd.actors[i] = _unpackActor(aw);
         }
     }
 
-    function _packDoor(Door memory d) internal pure returns (uint256 w) {
+    function _packDoor(Door memory d, uint256 doornum) internal pure returns (uint256 w) {
         w = d.action & 0xff;
         w |= uint256(uint16(int16(d.ticcount))) << 16;
         w |= (uint256(d.position) & 0xffff) << 32;
+        w |= (doornum & 0xff) << 48; // which door (only active doors are stored)
     }
 
     function _unpackDoorInto(Door memory d, uint256 w) internal pure {
