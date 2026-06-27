@@ -23,9 +23,9 @@ static void emit(long tick)
         printf(",\"rng\":%d,\"guards\":[", rndindex);
         for (int i = 0; i < numenemies; i++) {
             objtype *g = &enemies[i];
-            printf("%s{\"x\":%ld,\"y\":%ld,\"dir\":%d,\"st\":%d,\"hp\":%d,\"tc\":%d,\"dist\":%ld}",
+            printf("%s{\"x\":%ld,\"y\":%ld,\"dir\":%d,\"st\":%d,\"hp\":%d,\"tc\":%d,\"dist\":%ld,\"cls\":%d}",
                    i ? "," : "", (long)g->x, (long)g->y, g->dir, g->state,
-                   g->hitpoints, g->ticcount, (long)g->distance);
+                   g->hitpoints, g->ticcount, (long)g->distance, g->obclass);
         }
         printf("]");
     }
@@ -100,8 +100,8 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (argc < 6 || (argc - 6) % 3 != 0) {
-        fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir> [gx gy gdir]...\n", argv[0]);
+    if (argc < 6 || (argc - 6) % 4 != 0) {
+        fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir> [gx gy gdir gclass]...\n", argv[0]);
         return 1;
     }
 
@@ -110,8 +110,8 @@ int main(int argc, char **argv)
     InitActors();
     US_InitRndT(0);
     SpawnPlayer(atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
-    for (int g = 6; g + 2 < argc; g += 3)
-        SpawnGuard(atoi(argv[g]), atoi(argv[g + 1]), atoi(argv[g + 2]));
+    for (int g = 6; g + 3 < argc; g += 4) /* gx gy gdir gclass (en_guard=0, en_ss=2) */
+        SpawnEnemy(atoi(argv[g + 3]), atoi(argv[g]), atoi(argv[g + 1]), atoi(argv[g + 2]));
     emit(tick); /* tic 0: initial state */
 
     f = fopen(argv[2], "r");

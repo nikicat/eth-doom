@@ -68,6 +68,29 @@ const statedef gstates[NUMSTATES] = {
     [S_GRDDIE4]    = { 0,  TH_NONE,  AC_NONE,        S_GRDDIE4 },
     [S_GRDPAIN]    = { 10, TH_NONE,  AC_NONE,        S_GRDCHASE1 },
     [S_GRDPAIN1]   = { 10, TH_NONE,  AC_NONE,        S_GRDCHASE1 },
+    /* WL_ACT2.C SS: same chase/die graph as the guard, but a 4-shot burst. */
+    [S_SSSTAND]    = { 0,  TH_STAND, AC_NONE,        S_SSSTAND },
+    [S_SSCHASE1]   = { 10, TH_CHASE, AC_NONE,        S_SSCHASE1S },
+    [S_SSCHASE1S]  = { 3,  TH_NONE,  AC_NONE,        S_SSCHASE2 },
+    [S_SSCHASE2]   = { 8,  TH_CHASE, AC_NONE,        S_SSCHASE3 },
+    [S_SSCHASE3]   = { 10, TH_CHASE, AC_NONE,        S_SSCHASE3S },
+    [S_SSCHASE3S]  = { 3,  TH_NONE,  AC_NONE,        S_SSCHASE4 },
+    [S_SSCHASE4]   = { 8,  TH_CHASE, AC_NONE,        S_SSCHASE1 },
+    [S_SSSHOOT1]   = { 20, TH_NONE,  AC_NONE,        S_SSSHOOT2 },
+    [S_SSSHOOT2]   = { 20, TH_NONE,  AC_SHOOT,       S_SSSHOOT3 },
+    [S_SSSHOOT3]   = { 10, TH_NONE,  AC_NONE,        S_SSSHOOT4 },
+    [S_SSSHOOT4]   = { 10, TH_NONE,  AC_SHOOT,       S_SSSHOOT5 },
+    [S_SSSHOOT5]   = { 10, TH_NONE,  AC_NONE,        S_SSSHOOT6 },
+    [S_SSSHOOT6]   = { 10, TH_NONE,  AC_SHOOT,       S_SSSHOOT7 },
+    [S_SSSHOOT7]   = { 10, TH_NONE,  AC_NONE,        S_SSSHOOT8 },
+    [S_SSSHOOT8]   = { 10, TH_NONE,  AC_SHOOT,       S_SSSHOOT9 },
+    [S_SSSHOOT9]   = { 10, TH_NONE,  AC_NONE,        S_SSCHASE1 },
+    [S_SSDIE1]     = { 15, TH_NONE,  AC_DEATHSCREAM, S_SSDIE2 },
+    [S_SSDIE2]     = { 15, TH_NONE,  AC_NONE,        S_SSDIE3 },
+    [S_SSDIE3]     = { 15, TH_NONE,  AC_NONE,        S_SSDIE4 },
+    [S_SSDIE4]     = { 0,  TH_NONE,  AC_NONE,        S_SSDIE4 },
+    [S_SSPAIN]     = { 10, TH_NONE,  AC_NONE,        S_SSCHASE1 },
+    [S_SSPAIN1]    = { 10, TH_NONE,  AC_NONE,        S_SSCHASE1 },
 };
 
 static void NewState(objtype *ob, int state) {
@@ -568,7 +591,10 @@ static void T_Chase(objtype *ob) {
         if (!dist || (dist == 1 && ob->distance < 0x4000)) chance = 300;
         else chance = (tics << 4) / dist;
 
-        if (US_RndT() < chance) { NewState(ob, S_GRDSHOOT1); return; }
+        if (US_RndT() < chance) {
+            NewState(ob, ob->obclass == ssobj ? S_SSSHOOT1 : S_GRDSHOOT1);
+            return;
+        }
         dodge = 1;
     }
 
@@ -682,7 +708,7 @@ static void T_Shoot(objtype *ob) {
 static void KillActor(objtype *ob) {
     ob->tilex = ob->x >> TILESHIFT;
     ob->tiley = ob->y >> TILESHIFT;
-    NewState(ob, S_GRDDIE1);
+    NewState(ob, ob->obclass == ssobj ? S_SSDIE1 : S_GRDDIE1);
     ob->flags &= ~FL_SHOOTABLE;
 }
 
@@ -695,8 +721,10 @@ static void DamageActor(objtype *ob, int damage) {
         KillActor(ob);
         return;
     }
-    if (ob->hitpoints & 1) NewState(ob, S_GRDPAIN);
-    else                   NewState(ob, S_GRDPAIN1);
+    if (ob->obclass == ssobj)
+        NewState(ob, (ob->hitpoints & 1) ? S_SSPAIN : S_SSPAIN1);
+    else
+        NewState(ob, (ob->hitpoints & 1) ? S_GRDPAIN : S_GRDPAIN1);
 }
 
 /* WL_AGENT.C GunAttack — player hitscan. The original picks the on-screen target via
@@ -807,14 +835,14 @@ void InitActors(void) {
     for (i = 0; i < 64; i++) areabyplayer[i] = 1;
 }
 
-/* Spawn a guard already alerted (stand -> SpawnStand -> FirstSighting), so it
- * begins in s_grdchase1 at chase speed. Sight detection arrives in a later step. */
-void SpawnGuard(int tilex, int tiley, int dir) {
+/* WL_ACT2.C SpawnStand(which): spawn a dormant guard or SS, standing and facing a
+ * cardinal dir (dir*2), at patrol speed. It wakes via T_Stand -> SightPlayer (LOS or
+ * noise), not at spawn. `active` stays ac_yes so the headless sim keeps thinking. */
+void SpawnEnemy(int which, int tilex, int tiley, int dir) {
     objtype *ob = &enemies[numenemies++];
     memset(ob, 0, sizeof(*ob));
 
-    /* SpawnNewObj(tilex,tiley,&s_grdstand): tictime 0 => ticcount 0, no RNG */
-    ob->state = S_GRDSTAND;
+    /* SpawnNewObj(...&s_?stand): tictime 0 => ticcount 0, no RNG */
     ob->ticcount = 0;
     ob->tilex = tilex;
     ob->tiley = tiley;
@@ -823,14 +851,18 @@ void SpawnGuard(int tilex, int tiley, int dir) {
     ob->areanumber = 0;
     actorat[tilex][tiley] = ob;
 
-    /* SpawnStand(en_guard): dormant, facing a cardinal dir (dir*2), patrol speed.
-     * It wakes via T_Stand -> SightPlayer (LOS or noise), not at spawn. `active`
-     * stays ac_yes so the headless sim keeps running its think every tic. */
     ob->dir = (dir & 3) * 2;          /* 4-way 0..3 -> dirtype east/north/west/south */
-    ob->obclass = guardobj;
     ob->speed = SPDPATROL;
     ob->flags = FL_SHOOTABLE;
-    ob->hitpoints = 25;
     ob->temp2 = 0;
     ob->active = ac_yes;
+    if (which == en_ss) {
+        ob->state = S_SSSTAND;
+        ob->obclass = ssobj;
+        ob->hitpoints = HP_SS;
+    } else {
+        ob->state = S_GRDSTAND;
+        ob->obclass = guardobj;
+        ob->hitpoints = HP_GUARD;
+    }
 }

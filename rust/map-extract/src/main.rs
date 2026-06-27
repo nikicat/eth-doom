@@ -112,9 +112,23 @@ fn decode_plane(maps: &[u8], start: usize, len: usize, tiles: usize, tag: u16) -
     Ok(rlew_expand(&carmack[1..], tiles, tag))
 }
 
-const fn is_guard(t: u16) -> bool {
-    // stand+patrol guards across the three difficulty bands (WL_GAME.C ScanInfoPlane)
-    matches!(t, 108..=115 | 144..=151 | 180..=187)
+/// WL_GAME.C ScanInfoPlane enemy codes: each (enemy, difficulty-band) is 8 codes
+/// (4 stand + 4 patrol), dir = (code - base) & 3. Returns (enemy_t class, dir).
+/// class: 0 guard, 1 officer, 2 SS, 3 dog (the engine spawns guard/SS, others fall
+/// back to guard until implemented).
+fn enemy_spawn(t: u16) -> Option<(u8, u8)> {
+    const BANDS: &[(u16, u8)] = &[
+        (108, 0), (144, 0), (180, 0), // guard
+        (116, 1), (152, 1), (188, 1), // officer
+        (126, 2), (162, 2), (198, 2), // SS
+        (134, 3), (170, 3), (206, 3), // dog
+    ];
+    for &(base, cls) in BANDS {
+        if (base..base + 8).contains(&t) {
+            return Some((cls, ((t - base) & 3) as u8));
+        }
+    }
+    None
 }
 
 /// WL1 statinfo[] type per index (WL_ACT1.C): 0 = non-bonus (dressing/block);
@@ -197,17 +211,17 @@ fn main() -> Result<()> {
     let plane0 = decode_plane(&maps, planestart[0], planelen[0], w * h, rlewtag)?; // tilemap
     let plane1 = decode_plane(&maps, planestart[1], planelen[1], w * h, rlewtag)?; // spawns
 
-    // scan plane 1 for the player start + guards + bonus items; plane 0 holds geometry
+    // scan plane 1 for the player start + enemies + bonus items; plane 0 holds geometry
     let mut spawn = None;
-    let mut guards = Vec::new();
+    let mut guards: Vec<[u8; 4]> = Vec::new();
     let mut items: Vec<[u8; 3]> = Vec::new();
     for y in 0..h {
         for x in 0..w {
             let t = plane1[y * w + x];
             if (19..=22).contains(&t) {
                 spawn = Some((x, y, (t - 19) as u8)); // dir: N=0 E=1 S=2 W=3
-            } else if is_guard(t) {
-                guards.push([x, y, (t & 3) as usize]); // facing 0..3 (each 4-code group)
+            } else if let Some((cls, dir)) = enemy_spawn(t) {
+                guards.push([x as u8, y as u8, dir, cls]); // tilex, tiley, dir, class
             } else if let Some(bo) = bonus_item(t) {
                 items.push([x as u8, y as u8, bo]); // tilex, tiley, itemnumber
             }
@@ -225,7 +239,7 @@ fn main() -> Result<()> {
                 let p1 = plane1[y * w + x];
                 row.push(if (x, y) == (sx, sy) {
                     '@'
-                } else if is_guard(p1) {
+                } else if enemy_spawn(p1).is_some() {
                     'G'
                 } else if (90..=101).contains(&t) {
                     'D'
@@ -244,7 +258,7 @@ fn main() -> Result<()> {
         "w": w, "h": h,
         "spawn": { "x": sx, "y": sy, "dir": sdir },
         "tiles": tiles,             // runtime tilemap: 1..=89 wall (texture (v-1)*2), 0x80|n door, 0 floor
-        "guards": guards,           // [tilex, tiley, dir] per guard
+        "guards": guards,           // [tilex, tiley, dir, class] per enemy (0 guard, 2 SS, 1/3 -> guard)
         "doors": doors,             // [tilex, tiley, vertical|lock<<1] per door, in doornum order
         "items": items,             // [tilex, tiley, itemnumber] per bonus item
     });

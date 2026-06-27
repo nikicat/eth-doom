@@ -74,7 +74,7 @@ function initTestRoom() {
       } // else floor (0)
     }
   spawnTile = { x: 4, y: 8, dir: 1 };
-  guardTiles = [[11, 8, 2]]; // behind the door, facing west
+  guardTiles = [[11, 8, 2, 0], [11, 10, 2, 2]]; // a guard + an SS behind the door (class 0/2)
   levelName = "test room (door + item demo)";
 }
 initTestRoom();
@@ -91,10 +91,10 @@ async function loadLevel(): Promise<boolean> {
     doorList = (L.doors as number[][] | undefined) ?? [];
     itemList = (L.items as number[][] | undefined) ?? [];
     guardTiles = (L.guards as number[][])
-      .map(([x, y, dir]) => ({ x, y, dir: dir ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
+      .map(([x, y, dir, cls]) => ({ x, y, dir: dir ?? 0, cls: cls ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
       .sort((a, b) => a.d - b.d)
       .slice(0, MAX_GUARDS)
-      .map((g) => [g.x, g.y, g.dir]);
+      .map((g) => [g.x, g.y, g.dir, g.cls]);
     return true;
   } catch {
     return false;
@@ -107,10 +107,12 @@ function tilesHex(): Hex {
   for (let i = 0; i < t.length; i++) t[i] = tiles[i] & 0xff;
   return bytesToHex(t);
 }
-// guards blob: 3 bytes each (tilex, tiley, dir) — engine spawns them dormant
+// enemies blob: 4 bytes each (tilex, tiley, dir, class) — engine spawns them dormant
 function guardsHex(): Hex {
-  const b = new Uint8Array(guardTiles.length * 3);
-  guardTiles.forEach(([x, y, dir], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = (dir ?? 0) & 3; });
+  const b = new Uint8Array(guardTiles.length * 4);
+  guardTiles.forEach(([x, y, dir, cls], i) => {
+    b[i * 4] = x; b[i * 4 + 1] = y; b[i * 4 + 2] = (dir ?? 0) & 3; b[i * 4 + 3] = cls ?? 0;
+  });
   return bytesToHex(b);
 }
 // doors blob: 3 bytes each (tilex, tiley, vertical|lock<<1), in doornum order
@@ -156,7 +158,7 @@ function sfld(w: bigint, sh: number, bits: number): number {
   return Number(v);
 }
 
-type Guard = { x: number; y: number; dir: number; state: number; hp: number };
+type Guard = { x: number; y: number; dir: number; state: number; hp: number; obclass: number };
 type Door = { action: number; position: number };
 type State = {
   rndindex: number;
@@ -197,6 +199,7 @@ function decode(hex: string): State {
       dir: fld(a, 80, 8),
       state: fld(a, 88, 8),
       hp: sfld(a, 144, 16),
+      obclass: fld(a, 168, 8),
     });
   }
   return {
@@ -222,12 +225,23 @@ function decode(hex: string): State {
 // guard state IDs (gstates[] order in wl_actor.c)
 const S_STAND = 0, S_CHASE1 = 1, S_CHASE4 = 6, S_SHOOT1 = 7, S_SHOOT3 = 9;
 const S_DIE1 = 10, S_DIE4 = 13, S_PAIN = 14, S_PAIN1 = 15;
-const isChasing = (s: number) => s >= S_CHASE1 && s <= S_CHASE4;
-const isFiring = (s: number) => s >= S_SHOOT1 && s <= S_SHOOT3;
-const isDead = (s: number) => s >= S_DIE1 && s <= S_DIE4;
-const isPain = (s: number) => s === S_PAIN || s === S_PAIN1;
+const SSOBJ = 5; // obclass for the SS
+// SS states (16..37) mirror the guard graph (with a 9-state shoot burst); fold them
+// onto the guard state ids for rendering/category checks.
+function rs(s: number): number {
+  if (s < 16) return s;
+  if (s === 16) return S_STAND;
+  if (s <= 22) return s - 16; // sschase 17..22 -> chase 1..6
+  if (s <= 31) return S_SHOOT1 + ((s - 23) % 3); // ssshoot 23..31 -> shoot 7..9
+  if (s <= 35) return S_DIE1 + (s - 32); // ssdie 32..35 -> die 10..13
+  return s === 36 ? S_PAIN : S_PAIN1; // sspain 36/37 -> 14/15
+}
+const isChasing = (s: number) => { const r = rs(s); return r >= S_CHASE1 && r <= S_CHASE4; };
+const isFiring = (s: number) => { const r = rs(s); return r >= S_SHOOT1 && r <= S_SHOOT3; };
+const isDead = (s: number) => { const r = rs(s); return r >= S_DIE1 && r <= S_DIE4; };
+const isPain = (s: number) => { const r = rs(s); return r === S_PAIN || r === S_PAIN1; };
 function stateName(s: number): string {
-  if (s === S_STAND) return "stand";
+  if (rs(s) === S_STAND) return "stand";
   if (isChasing(s)) return "chasing";
   if (isFiring(s)) return "FIRING";
   if (isDead(s)) return "dead";
@@ -435,7 +449,7 @@ function calcRotate(g: Guard, angTo: number): number {
   return Math.floor(a / 45) & 7;
 }
 function guardSprite(g: Guard, angTo: number): number {
-  const s = g.state;
+  const s = rs(g.state); // SS folds onto the guard frames (tinted blue at draw time)
   if (isFiring(s)) return 96 + (s - S_SHOOT1); // SHOOT1..3 = 96..98
   if (isPain(s)) return s === S_PAIN ? 90 : 94; // PAIN_1=90, PAIN_2=94
   if (isDead(s)) { const k = s - S_DIE1; return k < 3 ? 91 + k : 95; } // DIE_1..3=91..93, DEAD=95
@@ -521,13 +535,14 @@ const TEXW = 16, TEXH = 24;
 type RGB = [number, number, number];
 
 function guardPalette(g: Guard): Record<string, RGB | null> {
-  let uni: RGB = [65, 80, 110]; // blue-gray uniform (chasing/stand)
-  if (isFiring(g.state)) uni = [92, 108, 150];
+  const ss = g.obclass === SSOBJ; // SS wear a vivid blue uniform
+  let uni: RGB = ss ? [40, 58, 165] : [96, 82, 58]; // SS blue vs guard tan-gray
+  if (isFiring(g.state)) uni = ss ? [60, 80, 205] : [128, 112, 80];
   if (isPain(g.state)) uni = [200, 200, 210];
   return {
     ".": null,
     o: [20, 17, 13],
-    h: [45, 58, 82],
+    h: ss ? [30, 42, 110] : [70, 60, 44],
     f: [216, 168, 120],
     e: [26, 20, 16],
     u: uni,

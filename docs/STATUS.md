@@ -25,6 +25,10 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 - **Pickups** — bonus items (`SpawnStatic`/`GetBonus`): walk onto a clip/first-aid/key/treasure to
   take it — ammo/health with id's clamps + "skip if full" guards, treasure → score, keys → the keyring
   (a **gold/silver key unlocks its locked door** in `OperateDoor`). Items vanish as they're consumed.
+- **Multiple enemy types** — guards don't walk through each other (`actorat` occupancy), and the **SS
+  trooper** is a second class (100 HP, faster reactions, a 4-shot burst) sharing the guard's
+  chase/LOS/hitscan via obclass-dispatched shoot/die/pain states. (Officer + dog spawn as guards for
+  now.)
 - **A live first-person browser view** — a TypeScript/viem client that deploys to anvil, drives the
   sim one `submitInput` tx per step, and renders the decoded on-chain state: a raycaster wall view
   (DDA adapted from 3DSage's MIT raycaster), guards as depth-buffered sprite columns, a pistol
@@ -50,7 +54,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2a** RNG + actor model | ✅ | deterministic `rndtable`/`US_RndT`; `objtype`/`DoActor` state machine; multi-actor packed state |
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
-| **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** (`OperateDoor`/`MoveDoors`/`Cmd_Use`, guard-opens-door + LOS gating) ✅; **pickups** (`GetBonus`: ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** (guards no longer overlap) ✅; other enemy types + `SessionFactory` ⬜ |
+| **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (multi-class enemies, 4-shot burst, 100 HP) ✅; dog/officer + `SessionFactory` ⬜ |
 | **M4** MegaETH + UX | ⬜ | deploy to MegaETH; session-key delegation + auto-signing; WASM Wolf3D-port renderer; client prediction |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
@@ -64,6 +68,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 74.3k | 81.6k | 108.8k |
 | `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 89.7k | 97.0k | 124.2k |
 | `two_guards` | two guards chase; the rear can't walk through the front (141 tics) | 81.8k | 96.3k | 119.6k |
+| `kill_ss` | an SS (100 HP, 4-shot burst) chases, fires, and dies (221 tics) | 70.1k | 77.2k | 106.2k |
 
 `submitInput` gas is the true per-input cost a player pays — ~65–125k with a live guard + door + items
 on the 16×16 test map, a fraction of a cent on a cheap L2. Map data is stored **SSTORE2-style** (a data
@@ -82,8 +87,8 @@ Per `DESIGN.md`: the C `sim_oracle` (carved from id's source) replays an input v
 per-tick **golden vectors**; the Rust harness deploys the contracts on anvil, replays the same
 inputs through `Session.submitInput`, and asserts the decoded state matches the golden vector
 **tic-by-tic** (player pose/health/ammo/keys/score, every guard field, every door's
-position/action/ticcount, every item's taken bit, and the RNG index — over single- and multi-guard
-scenarios). All seven scenarios pass.
+position/action/ticcount, every item's taken bit, obclass, and the RNG index — over single-guard,
+multi-guard, and SS scenarios). All eight scenarios pass.
 
 ## Run it
 
@@ -101,8 +106,9 @@ anvil --silent &
 - **Gas**: state re-pack ✅ and SSTORE2 map ✅ are done; the remaining levers are per-actor
   packing (re-encoding every actor each tick) and capping live-actor count.
 - **M3**: dormant guards + line-of-sight ✅, doors ✅, pickups ✅ (ammo/health/keys/treasure, keys
-  unlock doors; differential-verified `item_pickup`), actor-vs-actor collision ✅ (`two_guards`);
-  next: other enemy types (dog/SS/officer), `SessionFactory`.
+  unlock doors; differential-verified `item_pickup`), actor-vs-actor collision ✅ (`two_guards`),
+  the SS trooper ✅ (`kill_ss` — a harder, faster guard with a 4-shot burst); next: the dog (melee)
+  and officer, then `SessionFactory`.
 - **Gas**: doors/items now SSTORE2-stored, door state is sparse (closed doors cost nothing) →
   E1L1 ~397k → ~324k. Remaining levers: cull dead actors (corpses linger in the state) + a tighter
   actor word.

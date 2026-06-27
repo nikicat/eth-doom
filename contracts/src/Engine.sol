@@ -79,13 +79,25 @@ contract Engine {
     uint256 internal constant TH_STAND = 1;
     uint256 internal constant TH_CHASE = 2;
 
-    // guard state ids (match the oracle's enum)
+    // guard + SS state ids (match the oracle's enum)
     uint256 internal constant S_GRDSTAND = 0;
     uint256 internal constant S_GRDCHASE1 = 1;
     uint256 internal constant S_GRDSHOOT1 = 7;
     uint256 internal constant S_GRDDIE1 = 10;
     uint256 internal constant S_GRDPAIN = 14;
     uint256 internal constant S_GRDPAIN1 = 15;
+    uint256 internal constant S_SSSTAND = 16;
+    uint256 internal constant S_SSCHASE1 = 17;
+    uint256 internal constant S_SSSHOOT1 = 23;
+    uint256 internal constant S_SSDIE1 = 32;
+    uint256 internal constant S_SSPAIN = 36;
+    uint256 internal constant S_SSPAIN1 = 37;
+
+    // classtype: guardobj=3, ssobj=5 (obclass = guardobj + enemy_t)
+    uint8 internal constant GUARDOBJ = 3;
+    uint8 internal constant SSOBJ = 5;
+    uint256 internal constant EN_SS = 2; // enemy_t spawn index for the SS
+    int256 internal constant HP_SS = 100;
 
     // direction tables (WL_STATE.C). OPPOSITE[9]; DIAGONAL[9][9] row-major.
     bytes internal constant OPPOSITE = hex"040506070001020308";
@@ -185,11 +197,17 @@ contract Engine {
         wd.p.health = 100;
         wd.p.ammo = STARTAMMO;
 
-        bytes memory guards = IMap(map).guards(); // 3 bytes each: tilex,tiley,dir
-        uint256 n = guards.length / 3;
+        bytes memory guards = IMap(map).guards(); // 4 bytes each: tilex,tiley,dir,class
+        uint256 n = guards.length / 4;
         wd.actors = new Actor[](n);
         for (uint256 i = 0; i < n; i++) {
-            _spawnGuard(wd.actors[i], uint8(guards[i * 3]), uint8(guards[i * 3 + 1]), uint8(guards[i * 3 + 2]));
+            _spawnEnemy(
+                wd.actors[i],
+                uint8(guards[i * 4 + 3]), // enemy_t (en_guard / en_ss)
+                uint8(guards[i * 4]),
+                uint8(guards[i * 4 + 1]),
+                uint8(guards[i * 4 + 2])
+            );
         }
         return _pack(wd);
     }
@@ -280,23 +298,32 @@ contract Engine {
         }
     }
 
-    /// WL_ACT2.C SpawnStand(en_guard): spawn dormant (standing), facing a cardinal
-    /// direction (dir*2), at patrol speed. It wakes via T_Stand -> SightPlayer (LOS
-    /// or noise), not at spawn. `active` stays ac_yes so the headless sim keeps
-    /// running its think every tic.
-    function _spawnGuard(Actor memory a, uint256 tilex, uint256 tiley, uint256 dir) internal pure {
+    /// WL_ACT2.C SpawnStand(which): spawn a dormant guard or SS, standing and facing
+    /// a cardinal direction (dir*2), at patrol speed. It wakes via T_Stand ->
+    /// SightPlayer (LOS or noise), not at spawn. `active` stays ac_yes so the headless
+    /// sim keeps running its think every tic.
+    function _spawnEnemy(Actor memory a, uint256 which, uint256 tilex, uint256 tiley, uint256 dir)
+        internal
+        pure
+    {
         a.tilex = tilex;
         a.tiley = tiley;
         a.x = (int256(tilex) << 16) + TILEGLOBAL / 2;
         a.y = (int256(tiley) << 16) + TILEGLOBAL / 2;
         a.dir = int256((dir & 3) * 2); // 4-way 0..3 -> dirtype east/north/west/south
-        a.state = S_GRDSTAND; // tictime 0 -> ticcount 0, think runs each tic
-        a.obclass = 3; // guardobj
-        a.hitpoints = 25;
         a.active = 1; // ac_yes
         a.flags = FL_SHOOTABLE;
         a.speed = SPDPATROL;
         a.temp2 = 0;
+        if (which == EN_SS) {
+            a.state = S_SSSTAND;
+            a.obclass = SSOBJ;
+            a.hitpoints = HP_SS;
+        } else {
+            a.state = S_GRDSTAND; // tictime 0 -> ticcount 0, think runs each tic
+            a.obclass = GUARDOBJ;
+            a.hitpoints = 25;
+        }
     }
 
     // ---------------- player movement (WL_AGENT.C) ----------------
@@ -915,7 +942,7 @@ contract Engine {
             if (dist == 0 || (dist == 1 && a.distance < 0x4000)) chance = 300;
             else chance = (TICS << 4) / dist;
             if (int256(_rnd(wd)) < chance) {
-                _newState(a, S_GRDSHOOT1);
+                _newState(a, a.obclass == SSOBJ ? S_SSSHOOT1 : S_GRDSHOOT1);
                 return;
             }
             dodge = true;
@@ -1029,15 +1056,15 @@ contract Engine {
             _killActor(a);
             return;
         }
-        if ((a.hitpoints & 1) == 1) _newState(a, S_GRDPAIN);
-        else _newState(a, S_GRDPAIN1);
+        if (a.obclass == SSOBJ) _newState(a, (a.hitpoints & 1) == 1 ? S_SSPAIN : S_SSPAIN1);
+        else _newState(a, (a.hitpoints & 1) == 1 ? S_GRDPAIN : S_GRDPAIN1);
     }
 
-    /// WL_STATE.C KillActor (guard: die animation, no longer shootable).
+    /// WL_STATE.C KillActor (die animation, no longer shootable).
     function _killActor(Actor memory a) internal pure {
         a.tilex = uint256(a.x >> 16);
         a.tiley = uint256(a.y >> 16);
-        _newState(a, S_GRDDIE1);
+        _newState(a, a.obclass == SSOBJ ? S_SSDIE1 : S_GRDDIE1);
         a.flags &= ~FL_SHOOTABLE;
     }
 
@@ -1144,7 +1171,30 @@ contract Engine {
         if (s == 12) return (15, 0, 0, 13); // die3
         if (s == 13) return (0, 0, 0, 13); // die4 (corpse)
         if (s == 14) return (10, 0, 0, 1); // pain  -> chase1
-        return (10, 0, 0, 1); // pain1 (s==15) -> chase1
+        if (s == 15) return (10, 0, 0, 1); // pain1 -> chase1
+        // --- SS (states 16..37): same graph as the guard, but a 4-shot burst ---
+        if (s == 16) return (0, TH_STAND, 0, 16); // s_ssstand
+        if (s == 17) return (10, TH_CHASE, 0, 18); // sschase1
+        if (s == 18) return (3, 0, 0, 19); // sschase1s
+        if (s == 19) return (8, TH_CHASE, 0, 20); // sschase2
+        if (s == 20) return (10, TH_CHASE, 0, 21); // sschase3
+        if (s == 21) return (3, 0, 0, 22); // sschase3s
+        if (s == 22) return (8, TH_CHASE, 0, 17); // sschase4
+        if (s == 23) return (20, 0, 0, 24); // ssshoot1
+        if (s == 24) return (20, 0, 1, 25); // ssshoot2 (AC_SHOOT)
+        if (s == 25) return (10, 0, 0, 26); // ssshoot3
+        if (s == 26) return (10, 0, 1, 27); // ssshoot4 (AC_SHOOT)
+        if (s == 27) return (10, 0, 0, 28); // ssshoot5
+        if (s == 28) return (10, 0, 1, 29); // ssshoot6 (AC_SHOOT)
+        if (s == 29) return (10, 0, 0, 30); // ssshoot7
+        if (s == 30) return (10, 0, 1, 31); // ssshoot8 (AC_SHOOT)
+        if (s == 31) return (10, 0, 0, 17); // ssshoot9 -> sschase1
+        if (s == 32) return (15, 0, 2, 33); // ssdie1 (AC_DEATHSCREAM)
+        if (s == 33) return (15, 0, 0, 34); // ssdie2
+        if (s == 34) return (15, 0, 0, 35); // ssdie3
+        if (s == 35) return (0, 0, 0, 35); // ssdie4 (corpse)
+        if (s == 36) return (10, 0, 0, 17); // sspain  -> sschase1
+        return (10, 0, 0, 17); // sspain1 (s==37) -> sschase1
     }
 
     // ---------------- helpers ----------------

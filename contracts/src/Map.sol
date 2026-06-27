@@ -31,7 +31,7 @@ contract Map is IMap {
         bytes memory it
     ) {
         require(t.length == w * h, "bad tiles length");
-        require(g.length % 3 == 0, "bad guards length");
+        require(g.length % 4 == 0, "bad guards length"); // tilex,tiley,dir,class
         require(d.length % 3 == 0, "bad doors length");
         require(it.length % 3 == 0, "bad items length");
         width = w;

@@ -74,8 +74,15 @@ enum {
 /* WL_DEF.H dirtype — order matters (opposite[]/diagonal[][] indexing). */
 typedef enum { east, northeast, north, northwest, west, southwest, south, southeast, nodir } dirtype;
 
-/* WL_DEF.H classtype (subset we simulate). */
-typedef enum { nothing, playerobj, inertobj, guardobj } classtype;
+/* WL_DEF.H classtype (subset we simulate). obclass = guardobj + enemy_t. */
+typedef enum { nothing, playerobj, inertobj, guardobj, officerobj, ssobj, dogobj } classtype;
+
+/* WL_DEF.H enemy_t spawn index (the byte stored per spawn in the Map). */
+enum { en_guard, en_officer, en_ss, en_dog };
+
+/* WL_ACT2.C starthitpoints[BABY] — our sim runs at difficulty 0 (guard=25). */
+#define HP_GUARD 25
+#define HP_SS    100
 
 /* activetype */
 enum { ac_no, ac_yes, ac_allways };
@@ -84,13 +91,22 @@ enum { ac_no, ac_yes, ac_allways };
 enum { TH_NONE, TH_STAND, TH_CHASE, TH_PATH };
 enum { AC_NONE, AC_SHOOT, AC_DEATHSCREAM };
 
-/* WL_ACT2.C guard state graph, as a flat indexed table (shapenum dropped — render-only). */
+/* WL_ACT2.C enemy state graphs, as one flat indexed table (shapenum dropped —
+ * render-only). Guard and SS share the think/action functions (T_Chase/T_Shoot/
+ * A_DeathScream); only the state transitions + sprites differ (the SS fires a
+ * 4-shot burst). The shoot/die/pain target state is chosen by obclass. */
 enum {
     S_GRDSTAND,
     S_GRDCHASE1, S_GRDCHASE1S, S_GRDCHASE2, S_GRDCHASE3, S_GRDCHASE3S, S_GRDCHASE4,
     S_GRDSHOOT1, S_GRDSHOOT2, S_GRDSHOOT3,
     S_GRDDIE1, S_GRDDIE2, S_GRDDIE3, S_GRDDIE4,
     S_GRDPAIN, S_GRDPAIN1,
+    S_SSSTAND,
+    S_SSCHASE1, S_SSCHASE1S, S_SSCHASE2, S_SSCHASE3, S_SSCHASE3S, S_SSCHASE4,
+    S_SSSHOOT1, S_SSSHOOT2, S_SSSHOOT3, S_SSSHOOT4, S_SSSHOOT5,
+    S_SSSHOOT6, S_SSSHOOT7, S_SSSHOOT8, S_SSSHOOT9,
+    S_SSDIE1, S_SSDIE2, S_SSDIE3, S_SSDIE4,
+    S_SSPAIN, S_SSPAIN1,
     NUMSTATES
 };
 
@@ -190,7 +206,7 @@ extern int      plux, pluy;                /* player 1/256 coords (for CheckLine
 extern const statedef gstates[NUMSTATES];
 
 void InitActors(void);                     /* clear lists, seed actorat from walls */
-void SpawnGuard(int tilex, int tiley, int dir);
+void SpawnEnemy(int which, int tilex, int tiley, int dir); /* which = en_guard / en_ss */
 void DoActor(objtype *ob);                 /* WL_PLAY.C state-machine advance */
 void PlayerAttack(int buttons);            /* fire cooldown + GunAttack hitscan */
 int  CheckSight(objtype *ob);              /* WL_STATE.C: FOV + LOS to player */

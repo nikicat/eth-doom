@@ -45,7 +45,7 @@ fn s16(w: U256, shift: usize) -> i64 {
 struct Snap {
     player: [i64; 9], // x,y,angle,tilex,tiley,anglefrac,health,ammo,acount
     rng: Option<i64>,
-    guards: Vec<[i64; 7]>, // x,y,dir,st,hp,tc,dist
+    guards: Vec<[i64; 8]>, // x,y,dir,st,hp,tc,dist,cls
     doors: Vec<[i64; 3]>,  // pos,act,tc
     items: Vec<i64>,       // taken (0/1) per item
     keys: i64,
@@ -62,7 +62,7 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
         if let Some(arr) = v.get("guards").and_then(|x| x.as_array()) {
             for gd in arr {
                 let f = |k: &str| gd[k].as_i64().unwrap();
-                guards.push([f("x"), f("y"), f("dir"), f("st"), f("hp"), f("tc"), f("dist")]);
+                guards.push([f("x"), f("y"), f("dir"), f("st"), f("hp"), f("tc"), f("dist"), f("cls")]);
             }
         }
         let mut doors = Vec::new();
@@ -216,7 +216,7 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     }
     for k in 0..n {
         let aw = word(state, 2 + ad + iw + k);
-        // golden guard order: x, y, dir, state, hp, ticcount, distance
+        // golden guard order: x, y, dir, state, hp, ticcount, distance, obclass
         let got = [
             s32(aw, 0),
             s32(aw, 32),
@@ -225,6 +225,7 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
             s16(aw, 144),
             s16(aw, 96),
             s32(aw, 112),
+            field(aw, 168, 8) as i64,
         ];
         if got != want.guards[k] {
             bail!("tic {tick} GUARD{k} mismatch\n  got  {:?}\n  want {:?}", got, want.guards[k]);
@@ -240,20 +241,23 @@ async fn main() -> Result<()> {
 
     // (name, map, input, golden, spawn, guards bytes)
     let scenarios: &[(&str, &str, &str, &str, (u64, u64, u64), Vec<u8>)] = &[
+        // guard spawn bytes: tilex, tiley, dir, class (0 = en_guard, 2 = en_ss)
         ("move_basic", "oracle/maps/test_room.txt", "vectors/move_basic.input.txt",
          "vectors/move_basic.golden.jsonl", (8, 8, 1), vec![]),
         ("chase_guard", "oracle/maps/test_room.txt", "vectors/chase_guard.input.txt",
-         "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 2]),
+         "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 2, 0]),
         ("kill_guard", "oracle/maps/test_room.txt", "vectors/kill_guard.input.txt",
-         "vectors/kill_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2]),
+         "vectors/kill_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 0]),
         ("door_use", "oracle/maps/door_room.txt", "vectors/door_use.input.txt",
          "vectors/door_use.golden.jsonl", (4, 8, 1), vec![]),
         ("door_guard", "oracle/maps/door_room.txt", "vectors/door_guard.input.txt",
-         "vectors/door_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2]),
+         "vectors/door_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 0]),
         ("item_pickup", "oracle/maps/item_room.txt", "vectors/item_pickup.input.txt",
-         "vectors/item_pickup.golden.jsonl", (2, 8, 1), vec![13, 8, 2]),
+         "vectors/item_pickup.golden.jsonl", (2, 8, 1), vec![13, 8, 2, 0]),
         ("two_guards", "oracle/maps/test_room.txt", "vectors/two_guards.input.txt",
-         "vectors/two_guards.golden.jsonl", (2, 8, 1), vec![10, 8, 2, 11, 8, 2]),
+         "vectors/two_guards.golden.jsonl", (2, 8, 1), vec![10, 8, 2, 0, 11, 8, 2, 0]),
+        ("kill_ss", "oracle/maps/test_room.txt", "vectors/kill_ss.input.txt",
+         "vectors/kill_ss.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 2]),
     ];
 
     for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {

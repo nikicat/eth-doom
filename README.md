@@ -4,12 +4,12 @@ Wolfenstein-3D **world simulation** running as an EVM smart contract — the cha
 authoritative, deterministic multiplayer consensus engine (the same shape as Wolf3D's original
 lockstep netcode). Rendering and audio stay off-chain.
 
-**Working today:** dormant guards wake when they see or hear you, chase, shoot you, and you can shoot
-them dead; doors slide open when you Use them (or a guard bumps one) and block sight until they do;
-you pick up ammo / health / keys / treasure by walking over them (keys unlock their doors) — a PvE
-loop simulated entirely in a Solidity contract, **verified bit-for-bit against the original id C
-code**, at ~65–125k gas per input (one guard + door + items), with a live **first-person** browser
-view (raycaster + HUD + minimap), all decoded from on-chain state.
+**Working today:** dormant guards (and tougher SS troopers) wake when they see or hear you, chase,
+shoot you, and you can shoot them dead — and they no longer walk through each other; doors slide open
+when you Use them (or a guard bumps one) and block sight until they do; you pick up ammo / health /
+keys / treasure by walking over them (keys unlock their doors) — a PvE loop simulated entirely in a
+Solidity contract, **verified bit-for-bit against the original id C code**, at ~65–125k gas per input,
+with a live **first-person** browser view (raycaster + HUD + minimap), all decoded from on-chain state.
 
 - **[docs/STATUS.md](docs/STATUS.md)** — milestones, what runs, gas numbers, how to run it.
 - **[docs/DESIGN.md](docs/DESIGN.md)** — architecture, the differential-testing method, state
