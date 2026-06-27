@@ -26,35 +26,68 @@ const pub = createPublicClient({ chain: foundry, transport });
 // World / map  (positions are 16.16 fixed-point; 1 tile = TILEGLOBAL)
 // ---------------------------------------------------------------------------
 const TILEGLOBAL = 65536;
-const W = 16;
-const H = 16;
-// player spawns at tile (8,8), guard at (12,8) — keep row 8 open between them so
-// the chase has a clear lane; pillars give the raycaster some geometry to show.
-const MAP = [
-  "################",
-  "#..............#",
-  "#..###....###..#",
-  "#..............#",
-  "#..............#",
-  "#.....####.....#",
-  "#..............#",
-  "#..............#",
-  "#..............#",
-  "#.....####.....#",
-  "#..............#",
-  "#..............#",
-  "#..###....###..#",
-  "#..............#",
-  "#..............#",
-  "################",
-];
-// flat 0/1 collision grid the raycaster marches (same blob deployed to Map.sol)
-const GRID = new Uint8Array(W * H);
-for (let y = 0; y < H; y++)
-  for (let x = 0; x < W; x++) GRID[y * W + x] = MAP[y][x] === "#" ? 1 : 0;
+const MAX_GUARDS = 12; // cap spawned guards (nearest to the player) for gas/sanity
 
+// The world is dynamic: a real Wolf3D level from /level.json (run map-extract via
+// scripts/fetch-shareware.sh) if present, else a built-in test room. `tiles` holds
+// the per-tile wall value (0 = floor; 1..89 = a wall texture); the engine only
+// needs the 0/1 collision grid (tilesHex).
+let W = 16, H = 16;
+let tiles = new Uint16Array(W * H);
+let spawnTile = { x: 8, y: 8, dir: 1 }; // engine dir: angle = (1-dir)*90 ; 1 = east
+let guardTiles: number[][] = [[12, 8]];
+let levelName = "test room";
+
+const isSolid = (v: number) => v >= 1 && v < 90; // doors (90+) & areas are passable
+
+function initTestRoom() {
+  const MAP = [
+    "################", "#..............#", "#..###....###..#", "#..............#",
+    "#..............#", "#.....####.....#", "#..............#", "#..............#",
+    "#..............#", "#.....####.....#", "#..............#", "#..............#",
+    "#..###....###..#", "#..............#", "#..............#", "################",
+  ];
+  W = 16; H = 16;
+  tiles = new Uint16Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) tiles[y * W + x] = MAP[y][x] === "#" ? 1 : 0;
+  spawnTile = { x: 8, y: 8, dir: 1 };
+  guardTiles = [[12, 8]];
+  levelName = "test room";
+}
+initTestRoom();
+
+async function loadLevel(): Promise<boolean> {
+  try {
+    const r = await fetch("/level.json");
+    if (!r.ok) return false;
+    const L = await r.json();
+    W = L.w; H = L.h;
+    tiles = Uint16Array.from(L.tiles as number[]);
+    spawnTile = { x: L.spawn.x, y: L.spawn.y, dir: L.spawn.dir };
+    levelName = L.name ?? "level";
+    guardTiles = (L.guards as number[][])
+      .map(([x, y]) => ({ x, y, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, MAX_GUARDS)
+      .map((g) => [g.x, g.y]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 0/1 collision grid deployed to Map.sol (the engine only cares about solid/not)
 function tilesHex(): Hex {
-  return bytesToHex(GRID);
+  const t = new Uint8Array(W * H);
+  for (let i = 0; i < t.length; i++) t[i] = isSolid(tiles[i]) ? 1 : 0;
+  return bytesToHex(t);
+}
+// guards blob: 3 bytes each (tilex, tiley, dir) — engine spawns them alerted
+function guardsHex(): Hex {
+  const b = new Uint8Array(guardTiles.length * 3);
+  guardTiles.forEach(([x, y], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = 0; });
+  return bytesToHex(b);
 }
 
 async function deploy(art: any, args: any[]): Promise<Address> {
@@ -182,12 +215,13 @@ const zbuf = new Float64Array(VW); // perpendicular wall distance per column (sa
  * its distance, whether it's a vertical (E/W-facing) grid line, and the texture
  * column 0..63 where the ray struck the wall (for texture mapping).
  */
-function castRay(px: number, py: number, ra: number): { dist: number; vertical: boolean; tex: number } {
+function castRay(px: number, py: number, ra: number): { dist: number; vertical: boolean; tex: number; tile: number } {
   ra = fixAng(ra);
   const cs = Math.cos(ra * DR), sn = Math.sin(ra * DR);
   let rx: number, ry: number, xo: number, yo: number, dof: number;
   let disV = 1e9, disH = 1e9;
   let vy = py, hx = px; // wall-hit coords used for the texture column
+  let vtile = 1, htile = 1; // wall value at the hit (for texture selection)
 
   // --- vertical grid lines (x = k*U) ---
   let Tan = Math.tan(ra * DR);
@@ -197,7 +231,7 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
   while (dof < 8) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
-    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; }
+    if (mx >= 0 && mx < W && my >= 0 && my < H && isSolid(tiles[mp])) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = tiles[mp]; }
     else { rx += xo; ry += yo; dof++; }
   }
 
@@ -209,16 +243,16 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
   while (dof < 8) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
-    if (mx >= 0 && mx < W && my >= 0 && my < H && GRID[mp] === 1) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; }
+    if (mx >= 0 && mx < W && my >= 0 && my < H && isSolid(tiles[mp])) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = tiles[mp]; }
     else { rx += xo; ry += yo; dof++; }
   }
 
   if (disV < disH) {
     const t = vy / U; // hit on a vertical face → texture runs along Y
-    return { dist: disV, vertical: true, tex: (t - Math.floor(t)) * 64 };
+    return { dist: disV, vertical: true, tex: (t - Math.floor(t)) * 64, tile: vtile };
   }
   const t = hx / U; // horizontal face → texture runs along X
-  return { dist: disH, vertical: false, tex: (t - Math.floor(t)) * 64 };
+  return { dist: disH, vertical: false, tex: (t - Math.floor(t)) * 64, tile: htile };
 }
 
 // ---------------------------------------------------------------------------
@@ -226,14 +260,14 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
 // from a user-provided VSWAP.WL1 into /wolf/*.png. Never committed; absent by
 // default, in which case the renderer falls back to the procedural art below.
 // ---------------------------------------------------------------------------
-const WALL_TEX = 0; // wall page used for our 0/1 map (0 = dark face, 1 = light face)
 // player pistol viewmodel frames (sprite indices in this shareware's VSWAP, found
 // empirically: 425 ready, 426 the muzzle-flash fire frame, 427/428 recoil).
 const PISTOL_READY = 425;
 const PISTOL_FIRE = [426, 427, 428];
+// Wolf3D wall texture page for tile value v: vertical (N/S) face (v-1)*2, horizontal +1
+const wallPage = (v: number, vertical: boolean) => (Math.max(1, v) - 1) * 2 + (vertical ? 0 : 1);
 type Assets = {
-  wall: HTMLCanvasElement;
-  wallLit: HTMLCanvasElement;
+  walls: Map<number, HTMLCanvasElement>; // wall texture pages, keyed by VSWAP page index
   sprites: Map<number, HTMLCanvasElement>;
   pics: Map<number, HTMLCanvasElement>; // VGAGRAPH HUD pics (status bar, digits, faces)
 };
@@ -292,9 +326,15 @@ async function loadAssets(): Promise<Assets | null> {
   }
   if (!manifest?.sprites_written) return null;
   const p3 = (n: number) => String(n).padStart(3, "0");
-  const wall = await loadImg64(`/wolf/wall_${p3(WALL_TEX)}.png`);
-  if (!wall) return null;
-  const wallLit = (await loadImg64(`/wolf/wall_${p3(WALL_TEX + 1)}.png`)) ?? wall;
+  // load only the wall texture pages this level actually uses (both faces per tile)
+  const walls = new Map<number, HTMLCanvasElement>();
+  const pages = new Set<number>([0, 1]);
+  for (const v of tiles) if (isSolid(v)) { pages.add(wallPage(v, true)); pages.add(wallPage(v, false)); }
+  for (const p of pages) {
+    const c = await loadImg64(`/wolf/wall_${p3(p)}.png`);
+    if (c) walls.set(p, c);
+  }
+  if (walls.size === 0) return null;
   const sprites = new Map<number, HTMLCanvasElement>();
   const need = [PISTOL_READY, ...PISTOL_FIRE]; // player pistol
   for (let i = 50; i <= 98; i++) need.push(i); // guard frames: SPR_GRD_S_1=50 … SPR_GRD_SHOOT3=98
@@ -311,7 +351,7 @@ async function loadAssets(): Promise<Assets | null> {
     const c = await loadImgRaw(`/wolf/pic_${p3(i)}.png`);
     if (c) pics.set(i, c);
   }
-  return { wall, wallLit, sprites, pics };
+  return { walls, sprites, pics };
 }
 
 // our guard `state`+`dir` → Wolf3D sprite index (enum order; SPR_GRD_S_1 = 50).
@@ -500,8 +540,8 @@ function renderView(s: State, clock: number, fx: Fx) {
     const top = VH / 2 - lineH / 2;
     const shade = Math.max(0.16, Math.min(1, 1.25 - perp / 760));
     if (assets) {
-      // real Wolf3D texture: blit a 1px-wide source column scaled to the wall height
-      const tex = hit.vertical ? assets.wall : assets.wallLit;
+      // real Wolf3D texture for this tile's value + face; blit a 1px source column
+      const tex = assets.walls.get(wallPage(hit.tile, hit.vertical)) ?? assets.walls.get(0)!;
       const sx = Math.min(63, Math.max(0, Math.floor(hit.tex)));
       vctx.drawImage(tex, sx, 0, 1, 64, c, top, 1, lineH);
       let darkA = 1 - shade;
@@ -699,10 +739,11 @@ function renderMap(s: State) {
   const SC = mapC.width / W;
   mctx.fillStyle = "#000";
   mctx.fillRect(0, 0, mapC.width, mapC.height);
+  const px0 = SC > 4 ? 1 : 0; // gridlines only when tiles are big enough
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
-      mctx.fillStyle = GRID[y * W + x] ? "#3a3a4a" : "#0c0c14";
-      mctx.fillRect(x * SC, y * SC, SC - 1, SC - 1);
+      mctx.fillStyle = isSolid(tiles[y * W + x]) ? "#3a3a4a" : "#0c0c14";
+      mctx.fillRect(x * SC, y * SC, SC - px0, SC - px0);
     }
   const px = (s.player.x / TILEGLOBAL) * SC, py = (s.player.y / TILEGLOBAL) * SC;
   // fov cone
@@ -732,9 +773,11 @@ function renderMap(s: State) {
 function renderDbg(s: State, tick: number, gas: number | null) {
   const g0 = s.guards[0];
   dbg.textContent =
+    `level     ${levelName} ${W}x${H}\n` +
     `tick      ${tick}\n` +
     `gas/input ${gas != null ? gas.toLocaleString() : "—"}\n` +
     `art       ${assets ? "real id (VSWAP)" : "procedural"}\n` +
+    `guards    ${s.guards.length}\n` +
     `rndindex  ${s.rndindex}\n\n` +
     `player\n` +
     `  health  ${s.player.health}\n` +
@@ -787,11 +830,14 @@ let lastGas: number | null = null;
 
 async function main() {
   vctx.imageSmoothingEnabled = false; // crisp texels
-  dbg.textContent = "loading assets / deploying Engine / Map / Session to anvil…";
+  dbg.textContent = "loading level + assets / deploying to anvil…";
+  await loadLevel(); // real Wolf3D level from /level.json if present, else the test room
   assets = await loadAssets(); // authentic id art if /wolf/*.png present, else procedural
   const engine = await deploy(EngineA, []);
   const map = await deploy(MapA, [
-    BigInt(W), BigInt(H), tilesHex(), 8n, 8n, 1n, "0x0c0804" as Hex, // guard at tile (12,8) dir west
+    BigInt(W), BigInt(H), tilesHex(),
+    BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
+    guardsHex(),
   ]);
   const session = await deploy(SessionA, [engine, map]);
 

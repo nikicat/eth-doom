@@ -21,13 +21,16 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   (DDA adapted from 3DSage's MIT raycaster), guards as depth-buffered sprite columns, a pistol
   viewmodel + muzzle/damage flashes, a Wolfenstein-style HUD (health/ammo/face + live gas/input),
   and a minimap. WASD/arrows move, Shift strafes, Space fires. No game logic client-side.
-- **Authentic id art, runtime-loaded** — `scripts/fetch-shareware.sh` downloads the freely-
-  distributable Wolf3D shareware and `rust/wl-extract` decodes it: **VSWAP** → wall textures + guard
-  sprites + the player pistol; **VGAGRAPH** (Huffman + VGA-planar) → the **HUD** (status bar, BJ face,
-  digit font). The client then renders real textured walls, billboarded guards (frame by `state`+`dir`
-  via `CalcRotate`), the real pistol, Wolf3D's flat floor/ceiling colors, and the authentic status bar
-  with the health-driven BJ face. **No id art is committed**; the client falls back to procedural art
-  when no data is present. Every format/palette/chunk-number comes from id's GPL source in `reference/`.
+- **Authentic id art + the real first level, runtime-loaded** — `scripts/fetch-shareware.sh` downloads
+  the freely-distributable Wolf3D shareware and the Rust extractors decode it: `wl-extract` does
+  **VSWAP** → wall textures + guard sprites + the player pistol and **VGAGRAPH** (Huffman + VGA-planar)
+  → the **HUD** (status bar, BJ face, digit font); `map-extract` does **MAPHEAD/GAMEMAPS** (Carmack +
+  RLEW) → **E1L1's real geometry + guard spawns**. The client deploys the real level as the `Map` and
+  renders it in first person — per-tile textured walls, billboarded guards (frame by `state`+`dir` via
+  `CalcRotate`), the real pistol, Wolf3D's flat floor/ceiling colors, and the authentic status bar with
+  the health-driven BJ face — all from on-chain state. **No id art/level is committed**; the client
+  falls back to procedural art + a test room when no data is present. Every format/palette/chunk-number
+  comes from id's GPL source in `reference/`.
 
 ## Milestones
 
@@ -38,7 +41,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2a** RNG + actor model | ✅ | deterministic `rndtable`/`US_RndT`; `objtype`/`DoActor` state machine; multi-actor packed state |
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
-| **M3** world completeness | ⬜ | doors, pickups, multiple enemies, real WL1 level via `map-extract`, `SessionFactory` |
+| **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; doors/pickups/other enemy types + `SessionFactory` ⬜ |
 | **M4** MegaETH + UX | ⬜ | deploy to MegaETH; session-key delegation + auto-signing; WASM Wolf3D-port renderer; client prediction |
 
 ## Gas (per `submitInput`, packed state, on anvil)

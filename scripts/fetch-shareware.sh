@@ -140,6 +140,12 @@ if [ "$DO_EXTRACT" = 1 ]; then
     done
     cargo run -q -p wl-extract --manifest-path "$ROOT/rust/Cargo.toml" -- \
       --vswap "$vswap" --out "$WOLF_OUT" ${vga[@]+"${vga[@]}"}
+    # decode the first level (E1L1) → web/public/level.json
+    mh="$OUT/MAPHEAD.${ext:-WL1}"; gm="$OUT/GAMEMAPS.${ext:-WL1}"
+    if [ -f "$mh" ] && [ -f "$gm" ]; then
+      cargo run -q -p map-extract --manifest-path "$ROOT/rust/Cargo.toml" -- \
+        --maphead "$mh" --gamemaps "$gm" --out "$ROOT/web/public/level.json"
+    fi
     echo "done — reload the web client; the HUD should read  art: real id (VSWAP)"
   else
     echo "cargo not found; skipping extraction. Run it yourself:" >&2

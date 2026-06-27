@@ -1,6 +1,10 @@
 [package]
 name = "map-extract"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
