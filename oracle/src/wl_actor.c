@@ -91,6 +91,23 @@ const statedef gstates[NUMSTATES] = {
     [S_SSDIE4]     = { 0,  TH_NONE,  AC_NONE,        S_SSDIE4 },
     [S_SSPAIN]     = { 10, TH_NONE,  AC_NONE,        S_SSCHASE1 },
     [S_SSPAIN1]    = { 10, TH_NONE,  AC_NONE,        S_SSCHASE1 },
+    /* WL_ACT2.C dog: melee-only chase (T_DogChase), jumps to bite, no pain. */
+    [S_DOGSTAND]   = { 0,  TH_STAND,    AC_NONE,        S_DOGSTAND },
+    [S_DOGCHASE1]  = { 10, TH_DOGCHASE, AC_NONE,        S_DOGCHASE1S },
+    [S_DOGCHASE1S] = { 3,  TH_NONE,     AC_NONE,        S_DOGCHASE2 },
+    [S_DOGCHASE2]  = { 8,  TH_DOGCHASE, AC_NONE,        S_DOGCHASE3 },
+    [S_DOGCHASE3]  = { 10, TH_DOGCHASE, AC_NONE,        S_DOGCHASE3S },
+    [S_DOGCHASE3S] = { 3,  TH_NONE,     AC_NONE,        S_DOGCHASE4 },
+    [S_DOGCHASE4]  = { 8,  TH_DOGCHASE, AC_NONE,        S_DOGCHASE1 },
+    [S_DOGJUMP1]   = { 10, TH_NONE,     AC_NONE,        S_DOGJUMP2 },
+    [S_DOGJUMP2]   = { 10, TH_NONE,     AC_BITE,        S_DOGJUMP3 },
+    [S_DOGJUMP3]   = { 10, TH_NONE,     AC_NONE,        S_DOGJUMP4 },
+    [S_DOGJUMP4]   = { 10, TH_NONE,     AC_NONE,        S_DOGJUMP5 },
+    [S_DOGJUMP5]   = { 10, TH_NONE,     AC_NONE,        S_DOGCHASE1 },
+    [S_DOGDIE1]    = { 15, TH_NONE,     AC_DEATHSCREAM, S_DOGDIE2 },
+    [S_DOGDIE2]    = { 15, TH_NONE,     AC_NONE,        S_DOGDIE3 },
+    [S_DOGDIE3]    = { 15, TH_NONE,     AC_NONE,        S_DOGDEAD },
+    [S_DOGDEAD]    = { 0,  TH_NONE,     AC_NONE,        S_DOGDEAD },
 };
 
 static void NewState(objtype *ob, int state) {
@@ -119,6 +136,13 @@ static void NewState(objtype *ob, int state) {
                 return 0;                                 \
         }                                                 \
     }
+/* cardinal step: dogs use CHECKDIAG (a door blocks them — they can't open one);
+ * everyone else uses CHECKSIDE (a door opens and they wait). */
+#define CHECKCARD(x, y)                                   \
+    {                                                     \
+        if (ob->obclass == dogobj) CHECKDIAG(x, y)        \
+        else CHECKSIDE(x, y)                              \
+    }
 
 /* WL_STATE.C TryWalk (guard path: CHECKSIDE on cardinals, CHECKDIAG on diagonals). */
 static int TryWalk(objtype *ob) {
@@ -126,25 +150,25 @@ static int TryWalk(objtype *ob) {
     uintptr_t temp;
 
     switch (ob->dir) {
-    case north:     CHECKSIDE(ob->tilex, ob->tiley - 1); ob->tiley--; break;
+    case north:     CHECKCARD(ob->tilex, ob->tiley - 1); ob->tiley--; break;
     case northeast:
         CHECKDIAG(ob->tilex + 1, ob->tiley - 1);
         CHECKDIAG(ob->tilex + 1, ob->tiley);
         CHECKDIAG(ob->tilex, ob->tiley - 1);
         ob->tilex++; ob->tiley--; break;
-    case east:      CHECKSIDE(ob->tilex + 1, ob->tiley); ob->tilex++; break;
+    case east:      CHECKCARD(ob->tilex + 1, ob->tiley); ob->tilex++; break;
     case southeast:
         CHECKDIAG(ob->tilex + 1, ob->tiley + 1);
         CHECKDIAG(ob->tilex + 1, ob->tiley);
         CHECKDIAG(ob->tilex, ob->tiley + 1);
         ob->tilex++; ob->tiley++; break;
-    case south:     CHECKSIDE(ob->tilex, ob->tiley + 1); ob->tiley++; break;
+    case south:     CHECKCARD(ob->tilex, ob->tiley + 1); ob->tiley++; break;
     case southwest:
         CHECKDIAG(ob->tilex - 1, ob->tiley + 1);
         CHECKDIAG(ob->tilex - 1, ob->tiley);
         CHECKDIAG(ob->tilex, ob->tiley + 1);
         ob->tilex--; ob->tiley++; break;
-    case west:      CHECKSIDE(ob->tilex - 1, ob->tiley); ob->tilex--; break;
+    case west:      CHECKCARD(ob->tilex - 1, ob->tiley); ob->tilex--; break;
     case northwest:
         CHECKDIAG(ob->tilex - 1, ob->tiley - 1);
         CHECKDIAG(ob->tilex - 1, ob->tiley);
@@ -636,10 +660,14 @@ int CheckSight(objtype *ob) {
     return CheckLine(ob);
 }
 
-/* WL_STATE.C FirstSighting (guard): wake into chase, 3x speed, attack flags. */
+/* WL_STATE.C FirstSighting: wake into the class's chase, with the class's speed
+ * multiplier (guard 3x, SS 4x, dog 2x), and set the attack flags. */
 void FirstSighting(objtype *ob) {
-    NewState(ob, S_GRDCHASE1);
-    ob->speed *= 3;
+    switch (ob->obclass) {
+    case ssobj:  NewState(ob, S_SSCHASE1);  ob->speed *= 4; break;
+    case dogobj: NewState(ob, S_DOGCHASE1); ob->speed *= 2; break;
+    default:     NewState(ob, S_GRDCHASE1); ob->speed *= 3; break; /* guard */
+    }
     if (ob->distance < 0) ob->distance = 0;
     ob->flags |= FL_ATTACKMODE | FL_FIRSTATTACK;
 }
@@ -660,7 +688,11 @@ int SightPlayer(objtype *ob) {
         } else if (!madenoise && !CheckSight(ob)) {
             return 0;
         }
-        ob->temp2 = 1 + US_RndT() / 4;  /* guard reaction delay */
+        switch (ob->obclass) {           /* class-specific reaction delay */
+        case ssobj:  ob->temp2 = 1 + US_RndT() / 6; break;
+        case dogobj: ob->temp2 = 1 + US_RndT() / 8; break;
+        default:     ob->temp2 = 1 + US_RndT() / 4; break; /* guard */
+        }
         return 0;
     }
     FirstSighting(ob);
@@ -706,9 +738,12 @@ static void T_Shoot(objtype *ob) {
 
 /* WL_STATE.C KillActor (guard: die animation, no longer shootable; points/item dropped). */
 static void KillActor(objtype *ob) {
+    int die = S_GRDDIE1;
+    if (ob->obclass == ssobj)       die = S_SSDIE1;
+    else if (ob->obclass == dogobj) die = S_DOGDIE1;
     ob->tilex = ob->x >> TILESHIFT;
     ob->tiley = ob->y >> TILESHIFT;
-    NewState(ob, ob->obclass == ssobj ? S_SSDIE1 : S_GRDDIE1);
+    NewState(ob, die);
     ob->flags &= ~FL_SHOOTABLE;
 }
 
@@ -721,6 +756,8 @@ static void DamageActor(objtype *ob, int damage) {
         KillActor(ob);
         return;
     }
+    if (ob->obclass == dogobj)
+        return;                          /* dogs have no pain state (1 HP) */
     if (ob->obclass == ssobj)
         NewState(ob, (ob->hitpoints & 1) ? S_SSPAIN : S_SSPAIN1);
     else
@@ -775,16 +812,54 @@ void PlayerAttack(int buttons) {
     }
 }
 
+/* WL_ACT2.C T_DogChase: melee chase — no LOS, always SelectDodgeDir; when within
+ * byte (MINACTORDIST) range it leaps into the bite (s_dogjump1). */
+static void T_DogChase(objtype *ob) {
+    long move, dx, dy;
+
+    if (ob->dir == nodir) {
+        SelectDodgeDir(ob);
+        if (ob->dir == nodir) return; /* blocked in */
+    }
+    move = ob->speed * tics;
+    while (move) {
+        dx = player->x - ob->x; if (dx < 0) dx = -dx; dx -= move;
+        if (dx <= MINACTORDIST) {
+            dy = player->y - ob->y; if (dy < 0) dy = -dy; dy -= move;
+            if (dy <= MINACTORDIST) { NewState(ob, S_DOGJUMP1); return; }
+        }
+        if (move < ob->distance) { MoveObj(ob, move); break; }
+        ob->x = ((long)ob->tilex << TILESHIFT) + TILEGLOBAL / 2;
+        ob->y = ((long)ob->tiley << TILESHIFT) + TILEGLOBAL / 2;
+        move -= ob->distance;
+        SelectDodgeDir(ob);
+        if (ob->dir == nodir) return;
+    }
+}
+
+/* WL_ACT2.C T_Bite: the dog's melee attack (sound dropped). */
+static void T_Bite(objtype *ob) {
+    long dx, dy;
+    dx = player->x - ob->x; if (dx < 0) dx = -dx; dx -= TILEGLOBAL;
+    if (dx <= MINACTORDIST) {
+        dy = player->y - ob->y; if (dy < 0) dy = -dy; dy -= TILEGLOBAL;
+        if (dy <= MINACTORDIST)
+            if (US_RndT() < 180) { TakeDamage(US_RndT() >> 4, ob); return; }
+    }
+}
+
 static void dispatch_think(int id, objtype *ob) {
     switch (id) {
-    case TH_STAND: T_Stand(ob); break;
-    case TH_CHASE: T_Chase(ob); break;
+    case TH_STAND:    T_Stand(ob); break;
+    case TH_CHASE:    T_Chase(ob); break;
+    case TH_DOGCHASE: T_DogChase(ob); break;
     default: break;
     }
 }
 static void dispatch_action(int id, objtype *ob) {
     switch (id) {
     case AC_SHOOT: T_Shoot(ob); break;
+    case AC_BITE:  T_Bite(ob); break;
     default: break;
     }
 }
@@ -860,6 +935,11 @@ void SpawnEnemy(int which, int tilex, int tiley, int dir) {
         ob->state = S_SSSTAND;
         ob->obclass = ssobj;
         ob->hitpoints = HP_SS;
+    } else if (which == en_dog) {
+        ob->state = S_DOGSTAND;
+        ob->obclass = dogobj;
+        ob->hitpoints = HP_DOG;
+        ob->speed = SPDDOG;
     } else {
         ob->state = S_GRDSTAND;
         ob->obclass = guardobj;

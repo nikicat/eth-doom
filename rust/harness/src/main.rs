@@ -258,6 +258,8 @@ async fn main() -> Result<()> {
          "vectors/two_guards.golden.jsonl", (2, 8, 1), vec![10, 8, 2, 0, 11, 8, 2, 0]),
         ("kill_ss", "oracle/maps/test_room.txt", "vectors/kill_ss.input.txt",
          "vectors/kill_ss.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 2]),
+        ("dog_bite", "oracle/maps/test_room.txt", "vectors/dog_bite.input.txt",
+         "vectors/dog_bite.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 3]),
     ];
 
     for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {

@@ -78,6 +78,8 @@ contract Engine {
     // think / action ids
     uint256 internal constant TH_STAND = 1;
     uint256 internal constant TH_CHASE = 2;
+    uint256 internal constant TH_DOGCHASE = 4;
+    uint256 internal constant AC_BITE = 3;
 
     // guard + SS state ids (match the oracle's enum)
     uint256 internal constant S_GRDSTAND = 0;
@@ -92,12 +94,20 @@ contract Engine {
     uint256 internal constant S_SSDIE1 = 32;
     uint256 internal constant S_SSPAIN = 36;
     uint256 internal constant S_SSPAIN1 = 37;
+    uint256 internal constant S_DOGSTAND = 38;
+    uint256 internal constant S_DOGCHASE1 = 39;
+    uint256 internal constant S_DOGJUMP1 = 45;
+    uint256 internal constant S_DOGDIE1 = 50;
 
-    // classtype: guardobj=3, ssobj=5 (obclass = guardobj + enemy_t)
+    // classtype: guardobj=3, ssobj=5, dogobj=6 (obclass = guardobj + enemy_t)
     uint8 internal constant GUARDOBJ = 3;
     uint8 internal constant SSOBJ = 5;
+    uint8 internal constant DOGOBJ = 6;
     uint256 internal constant EN_SS = 2; // enemy_t spawn index for the SS
+    uint256 internal constant EN_DOG = 3;
     int256 internal constant HP_SS = 100;
+    int256 internal constant HP_DOG = 1;
+    int256 internal constant SPDDOG = 1500;
 
     // direction tables (WL_STATE.C). OPPOSITE[9]; DIAGONAL[9][9] row-major.
     bytes internal constant OPPOSITE = hex"040506070001020308";
@@ -319,6 +329,11 @@ contract Engine {
             a.state = S_SSSTAND;
             a.obclass = SSOBJ;
             a.hitpoints = HP_SS;
+        } else if (which == EN_DOG) {
+            a.state = S_DOGSTAND;
+            a.obclass = DOGOBJ;
+            a.hitpoints = HP_DOG;
+            a.speed = SPDDOG;
         } else {
             a.state = S_GRDSTAND; // tictime 0 -> ticcount 0, think runs each tic
             a.obclass = GUARDOBJ;
@@ -613,9 +628,10 @@ contract Engine {
         int256 tx = int256(a.tilex);
         int256 ty = int256(a.tiley);
         int256 doornum = -1;
+        bool dog = a.obclass == DOGOBJ;
         if (a.dir == 0) {
             // east
-            (bool blk, int256 dn) = _checkSide(wd, tx + 1, ty);
+            (bool blk, int256 dn) = _checkCard(wd, tx + 1, ty, dog);
             if (blk) return false;
             doornum = dn;
             tx += 1;
@@ -628,7 +644,7 @@ contract Engine {
             ty -= 1;
         } else if (a.dir == 2) {
             // north
-            (bool blk, int256 dn) = _checkSide(wd, tx, ty - 1);
+            (bool blk, int256 dn) = _checkCard(wd, tx, ty - 1, dog);
             if (blk) return false;
             doornum = dn;
             ty -= 1;
@@ -641,7 +657,7 @@ contract Engine {
             ty -= 1;
         } else if (a.dir == 4) {
             // west
-            (bool blk, int256 dn) = _checkSide(wd, tx - 1, ty);
+            (bool blk, int256 dn) = _checkCard(wd, tx - 1, ty, dog);
             if (blk) return false;
             doornum = dn;
             tx -= 1;
@@ -654,7 +670,7 @@ contract Engine {
             ty += 1;
         } else if (a.dir == 6) {
             // south
-            (bool blk, int256 dn) = _checkSide(wd, tx, ty + 1);
+            (bool blk, int256 dn) = _checkCard(wd, tx, ty + 1, dog);
             if (blk) return false;
             doornum = dn;
             ty += 1;
@@ -701,6 +717,17 @@ contract Engine {
     function _checkDiag(World memory wd, int256 x, int256 y) internal pure returns (bool) {
         if (_actorTile(wd, x, y) != 0) return true;
         return _shootableActorAt(wd, x, y);
+    }
+
+    /// A cardinal step: dogs use CHECKDIAG (a door blocks them — they can't open one);
+    /// everyone else uses CHECKSIDE (a door opens and they wait).
+    function _checkCard(World memory wd, int256 x, int256 y, bool isDog)
+        internal
+        pure
+        returns (bool blocked, int256 doornum)
+    {
+        if (isDog) return (_checkDiag(wd, x, y), -1);
+        return _checkSide(wd, x, y);
     }
 
     /// WL_STATE.C `actorat` occupancy: a tile is blocked if a shootable actor stands on
@@ -1056,15 +1083,19 @@ contract Engine {
             _killActor(a);
             return;
         }
+        if (a.obclass == DOGOBJ) return; // dogs have no pain state (1 HP)
         if (a.obclass == SSOBJ) _newState(a, (a.hitpoints & 1) == 1 ? S_SSPAIN : S_SSPAIN1);
         else _newState(a, (a.hitpoints & 1) == 1 ? S_GRDPAIN : S_GRDPAIN1);
     }
 
     /// WL_STATE.C KillActor (die animation, no longer shootable).
     function _killActor(Actor memory a) internal pure {
+        uint256 die = S_GRDDIE1;
+        if (a.obclass == SSOBJ) die = S_SSDIE1;
+        else if (a.obclass == DOGOBJ) die = S_DOGDIE1;
         a.tilex = uint256(a.x >> 16);
         a.tiley = uint256(a.y >> 16);
-        _newState(a, a.obclass == SSOBJ ? S_SSDIE1 : S_GRDDIE1);
+        _newState(a, die);
         a.flags &= ~FL_SHOOTABLE;
     }
 
@@ -1095,6 +1126,7 @@ contract Engine {
 
     function _think(World memory wd, Actor memory a, uint256 id) internal pure {
         if (id == TH_CHASE) _tChase(wd, a);
+        else if (id == TH_DOGCHASE) _tDogChase(wd, a);
         else if (id == TH_STAND) _sightPlayer(wd, a); // T_Stand
     }
 
@@ -1112,10 +1144,19 @@ contract Engine {
         return _checkLine(wd, a);
     }
 
-    /// WL_STATE.C FirstSighting (guard): wake into chase, 3x speed, attack flags.
+    /// WL_STATE.C FirstSighting: wake into the class's chase with its speed multiplier
+    /// (guard 3x, SS 4x, dog 2x) and set attack flags.
     function _firstSighting(Actor memory a) internal pure {
-        _newState(a, S_GRDCHASE1);
-        a.speed *= 3;
+        if (a.obclass == SSOBJ) {
+            _newState(a, S_SSCHASE1);
+            a.speed *= 4;
+        } else if (a.obclass == DOGOBJ) {
+            _newState(a, S_DOGCHASE1);
+            a.speed *= 2;
+        } else {
+            _newState(a, S_GRDCHASE1);
+            a.speed *= 3;
+        }
         if (a.distance < 0) a.distance = 0;
         a.flags |= FL_ATTACKMODE | FL_FIRSTATTACK;
     }
@@ -1134,7 +1175,10 @@ contract Engine {
             } else if (!wd.madenoise && !_checkSight(wd, a)) {
                 return;
             }
-            a.temp2 = 1 + int256(_rnd(wd)) / 4; // guard reaction delay
+            int256 r = int256(_rnd(wd)); // class-specific reaction delay (one RNG draw)
+            if (a.obclass == SSOBJ) a.temp2 = 1 + r / 6;
+            else if (a.obclass == DOGOBJ) a.temp2 = 1 + r / 8;
+            else a.temp2 = 1 + r / 4;
             return;
         }
         _firstSighting(a);
@@ -1142,6 +1186,47 @@ contract Engine {
 
     function _action(World memory wd, Actor memory a, uint256 id) internal pure {
         if (id == 1) _tShoot(wd, a); // AC_SHOOT; AC_DEATHSCREAM (2) is render-only
+        else if (id == AC_BITE) _tBite(wd, a);
+    }
+
+    /// WL_ACT2.C T_DogChase: melee chase (no LOS, always SelectDodgeDir); leap into
+    /// the bite (s_dogjump1) once within byte (MINACTORDIST) range.
+    function _tDogChase(World memory wd, Actor memory a) internal pure {
+        if (a.dir == NODIR) {
+            _selectDodgeDir(wd, a);
+            if (a.dir == NODIR) return;
+        }
+        int256 move = a.speed * TICS;
+        while (move != 0) {
+            int256 dx = _abs(wd.p.x - a.x) - move;
+            if (dx <= MINACTORDIST) {
+                int256 dy = _abs(wd.p.y - a.y) - move;
+                if (dy <= MINACTORDIST) {
+                    _newState(a, S_DOGJUMP1);
+                    return;
+                }
+            }
+            if (move < a.distance) {
+                _moveObj(wd, a, move);
+                break;
+            }
+            a.x = (int256(a.tilex) << 16) + TILEGLOBAL / 2;
+            a.y = (int256(a.tiley) << 16) + TILEGLOBAL / 2;
+            move -= a.distance;
+            _selectDodgeDir(wd, a);
+            if (a.dir == NODIR) return;
+        }
+    }
+
+    /// WL_ACT2.C T_Bite: the dog's melee attack.
+    function _tBite(World memory wd, Actor memory a) internal pure {
+        int256 dx = _abs(wd.p.x - a.x) - TILEGLOBAL;
+        if (dx <= MINACTORDIST) {
+            int256 dy = _abs(wd.p.y - a.y) - TILEGLOBAL;
+            if (dy <= MINACTORDIST) {
+                if (int256(_rnd(wd)) < 180) _takeDamage(wd, int256(_rnd(wd)) >> 4);
+            }
+        }
     }
 
     function _newState(Actor memory a, uint256 state) internal pure {
@@ -1194,7 +1279,24 @@ contract Engine {
         if (s == 34) return (15, 0, 0, 35); // ssdie3
         if (s == 35) return (0, 0, 0, 35); // ssdie4 (corpse)
         if (s == 36) return (10, 0, 0, 17); // sspain  -> sschase1
-        return (10, 0, 0, 17); // sspain1 (s==37) -> sschase1
+        if (s == 37) return (10, 0, 0, 17); // sspain1 -> sschase1
+        // --- dog (states 38..53): melee chase + jump/bite, no pain ---
+        if (s == 38) return (0, TH_STAND, 0, 38); // s_dogstand
+        if (s == 39) return (10, TH_DOGCHASE, 0, 40); // dogchase1
+        if (s == 40) return (3, 0, 0, 41); // dogchase1s
+        if (s == 41) return (8, TH_DOGCHASE, 0, 42); // dogchase2
+        if (s == 42) return (10, TH_DOGCHASE, 0, 43); // dogchase3
+        if (s == 43) return (3, 0, 0, 44); // dogchase3s
+        if (s == 44) return (8, TH_DOGCHASE, 0, 39); // dogchase4
+        if (s == 45) return (10, 0, 0, 46); // dogjump1
+        if (s == 46) return (10, 0, AC_BITE, 47); // dogjump2 (T_Bite)
+        if (s == 47) return (10, 0, 0, 48); // dogjump3
+        if (s == 48) return (10, 0, 0, 49); // dogjump4
+        if (s == 49) return (10, 0, 0, 39); // dogjump5 -> dogchase1
+        if (s == 50) return (15, 0, 2, 51); // dogdie1 (AC_DEATHSCREAM)
+        if (s == 51) return (15, 0, 0, 52); // dogdie2
+        if (s == 52) return (15, 0, 0, 53); // dogdie3
+        return (0, 0, 0, 53); // dogdead (s==53)
     }
 
     // ---------------- helpers ----------------

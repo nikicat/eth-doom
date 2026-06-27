@@ -74,7 +74,7 @@ function initTestRoom() {
       } // else floor (0)
     }
   spawnTile = { x: 4, y: 8, dir: 1 };
-  guardTiles = [[11, 8, 2, 0], [11, 10, 2, 2]]; // a guard + an SS behind the door (class 0/2)
+  guardTiles = [[11, 8, 2, 0], [11, 10, 2, 2], [10, 6, 2, 3]]; // guard + SS + dog behind the door
   levelName = "test room (door + item demo)";
 }
 initTestRoom();
@@ -225,16 +225,21 @@ function decode(hex: string): State {
 // guard state IDs (gstates[] order in wl_actor.c)
 const S_STAND = 0, S_CHASE1 = 1, S_CHASE4 = 6, S_SHOOT1 = 7, S_SHOOT3 = 9;
 const S_DIE1 = 10, S_DIE4 = 13, S_PAIN = 14, S_PAIN1 = 15;
-const SSOBJ = 5; // obclass for the SS
-// SS states (16..37) mirror the guard graph (with a 9-state shoot burst); fold them
-// onto the guard state ids for rendering/category checks.
+const SSOBJ = 5, DOGOBJ = 6; // obclass values
+// SS (16..37) and dog (38..53) states mirror the guard graph; fold them onto the
+// guard state ids for rendering/category checks.
 function rs(s: number): number {
   if (s < 16) return s;
-  if (s === 16) return S_STAND;
+  if (s === 16) return S_STAND; // ssstand
   if (s <= 22) return s - 16; // sschase 17..22 -> chase 1..6
   if (s <= 31) return S_SHOOT1 + ((s - 23) % 3); // ssshoot 23..31 -> shoot 7..9
   if (s <= 35) return S_DIE1 + (s - 32); // ssdie 32..35 -> die 10..13
-  return s === 36 ? S_PAIN : S_PAIN1; // sspain 36/37 -> 14/15
+  if (s <= 37) return s === 36 ? S_PAIN : S_PAIN1; // sspain
+  if (s === 38) return S_STAND; // dogstand
+  if (s <= 44) return s - 38; // dogchase 39..44 -> chase 1..6
+  if (s <= 49) return S_SHOOT1; // dogjump (bite) -> a firing frame
+  if (s <= 52) return S_DIE1 + (s - 50); // dogdie 50..52 -> die 10..12
+  return S_DIE4; // dogdead
 }
 const isChasing = (s: number) => { const r = rs(s); return r >= S_CHASE1 && r <= S_CHASE4; };
 const isFiring = (s: number) => { const r = rs(s); return r >= S_SHOOT1 && r <= S_SHOOT3; };
@@ -535,15 +540,15 @@ const TEXW = 16, TEXH = 24;
 type RGB = [number, number, number];
 
 function guardPalette(g: Guard): Record<string, RGB | null> {
-  const ss = g.obclass === SSOBJ; // SS wear a vivid blue uniform
-  let uni: RGB = ss ? [40, 58, 165] : [96, 82, 58]; // SS blue vs guard tan-gray
-  if (isFiring(g.state)) uni = ss ? [60, 80, 205] : [128, 112, 80];
+  const ss = g.obclass === SSOBJ, dog = g.obclass === DOGOBJ; // SS blue, dog brown
+  let uni: RGB = dog ? [122, 78, 42] : ss ? [40, 58, 165] : [96, 82, 58];
+  if (isFiring(g.state)) uni = dog ? [150, 96, 52] : ss ? [60, 80, 205] : [128, 112, 80];
   if (isPain(g.state)) uni = [200, 200, 210];
   return {
     ".": null,
     o: [20, 17, 13],
-    h: ss ? [30, 42, 110] : [70, 60, 44],
-    f: [216, 168, 120],
+    h: dog ? [86, 54, 28] : ss ? [30, 42, 110] : [70, 60, 44],
+    f: dog ? [150, 100, 56] : [216, 168, 120],
     e: [26, 20, 16],
     u: uni,
     b: [32, 24, 16],

@@ -83,13 +83,15 @@ enum { en_guard, en_officer, en_ss, en_dog };
 /* WL_ACT2.C starthitpoints[BABY] — our sim runs at difficulty 0 (guard=25). */
 #define HP_GUARD 25
 #define HP_SS    100
+#define HP_DOG   1
+#define SPDDOG   1500L           /* dogs are faster than SPDPATROL (512) */
 
 /* activetype */
 enum { ac_no, ac_yes, ac_allways };
 
 /* think / action dispatch ids (replaces C function pointers) */
-enum { TH_NONE, TH_STAND, TH_CHASE, TH_PATH };
-enum { AC_NONE, AC_SHOOT, AC_DEATHSCREAM };
+enum { TH_NONE, TH_STAND, TH_CHASE, TH_PATH, TH_DOGCHASE };
+enum { AC_NONE, AC_SHOOT, AC_DEATHSCREAM, AC_BITE };
 
 /* WL_ACT2.C enemy state graphs, as one flat indexed table (shapenum dropped —
  * render-only). Guard and SS share the think/action functions (T_Chase/T_Shoot/
@@ -107,6 +109,13 @@ enum {
     S_SSSHOOT6, S_SSSHOOT7, S_SSSHOOT8, S_SSSHOOT9,
     S_SSDIE1, S_SSDIE2, S_SSDIE3, S_SSDIE4,
     S_SSPAIN, S_SSPAIN1,
+    /* dog: melee-only (T_DogChase, no LOS), jumps to bite at range, 1 HP, no pain.
+     * S_DOGSTAND is synthetic — id spawns dogs patrolling, but our headless model
+     * spawns every enemy dormant-standing (T_Stand) and wakes it via SightPlayer. */
+    S_DOGSTAND,
+    S_DOGCHASE1, S_DOGCHASE1S, S_DOGCHASE2, S_DOGCHASE3, S_DOGCHASE3S, S_DOGCHASE4,
+    S_DOGJUMP1, S_DOGJUMP2, S_DOGJUMP3, S_DOGJUMP4, S_DOGJUMP5,
+    S_DOGDIE1, S_DOGDIE2, S_DOGDIE3, S_DOGDEAD,
     NUMSTATES
 };
 

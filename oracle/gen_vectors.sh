@@ -48,5 +48,9 @@ run door_use door_room.txt 4 8 1
 "$ORACLE" oracle/maps/test_room.txt vectors/kill_ss.input.txt 4 8 1 12 8 2 2 \
     > vectors/kill_ss.golden.jsonl
 
+# dog_bite: a dog (1 HP, fast, melee) rushes the player and bites (T_DogChase/T_Bite).
+"$ORACLE" oracle/maps/test_room.txt vectors/dog_bite.input.txt 4 8 1 12 8 2 3 \
+    > vectors/dog_bite.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl
