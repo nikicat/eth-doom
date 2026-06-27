@@ -33,6 +33,11 @@ Session  per-game packed world state                    raycaster view       gol
 - **`Session`** (stateful) — the single source of truth for a live game: holds the packed world
   state + immutable `engine`/`map` addresses. `engine`/`map` are immutable so a live game's rules can
   never change underneath it.
+- **`SessionFactory`** — `createSession(engine, map)` deploys + records a `Session`, so many concurrent
+  matches share one engine and one map deployment and clients/indexers discover live games from its
+  events. Full deploys, not EIP-1167 clones: a clone can't use `immutable`, so it would read
+  `engine`/`map` from storage every `submitInput` (two cold `SLOAD`s/tick) — over a real game's
+  thousands of ticks that dwarfs the one-time clone saving, so immutable + full deploy wins overall.
 
 ### Packed world state
 
