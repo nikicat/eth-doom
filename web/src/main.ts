@@ -392,7 +392,9 @@ const zbuf = new Float64Array(VW); // perpendicular wall distance per column (sa
 // so the receded part is see-through — the ray passes into the room beyond.
 function rayBlocked(v: number, frac: number): boolean {
   if (isWall(v)) return true;
-  if (isDoor(v)) return frac < 1 - doorOpenFrac[v & 0x7f];
+  // door slides into a wall pocket: solid where frac >= open (panel shrinking from the
+  // left), see-through before it; the texture rides the panel (offset by open below).
+  if (isDoor(v)) return frac >= doorOpenFrac[v & 0x7f];
   return false;
 }
 
@@ -403,17 +405,19 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   let disV = 1e9, disH = 1e9;
   let vy = py, hx = px; // wall-hit coords used for the texture column
   let vtile = 1, htile = 1; // wall value at the hit (for texture selection)
+  // step across the whole map, not a tiny-map's 8 (8 dropped any wall >8 tiles away)
+  const maxdof = Math.max(W, H) + 1;
 
   // --- vertical grid lines (x = k*U) ---
   let Tan = Math.tan(ra * DR);
   dof = 0;
   if (cs > 0.001) { rx = Math.floor(px / U) * U + U; ry = (px - rx) * Tan + py; xo = U; yo = -xo * Tan; }
   else if (cs < -0.001) { rx = Math.floor(px / U) * U - 0.0001; ry = (px - rx) * Tan + py; xo = -U; yo = -xo * Tan; }
-  else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
-  while (dof < 8) {
+  else { rx = px; ry = py; dof = maxdof; xo = 0; yo = 0; }
+  while (dof < maxdof) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
     const frac = ry / U - Math.floor(ry / U); // door panel slides along Y for a vertical face
-    if (mx >= 0 && mx < W && my >= 0 && my < H && rayBlocked(tiles[mp], frac)) { dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = tiles[mp]; }
+    if (mx >= 0 && mx < W && my >= 0 && my < H && rayBlocked(tiles[mp], frac)) { dof = maxdof; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = tiles[mp]; }
     else { rx += xo; ry += yo; dof++; }
   }
 
@@ -422,20 +426,22 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
   Tan = 1 / Tan;
   if (sn > 0.001) { ry = Math.floor(py / U) * U - 0.0001; rx = (py - ry) * Tan + px; yo = -U; xo = -yo * Tan; }
   else if (sn < -0.001) { ry = Math.floor(py / U) * U + U; rx = (py - ry) * Tan + px; yo = U; xo = -yo * Tan; }
-  else { rx = px; ry = py; dof = 8; xo = 0; yo = 0; }
-  while (dof < 8) {
+  else { rx = px; ry = py; dof = maxdof; xo = 0; yo = 0; }
+  while (dof < maxdof) {
     const mx = Math.floor(rx / U), my = Math.floor(ry / U), mp = my * W + mx;
     const frac = rx / U - Math.floor(rx / U); // door panel slides along X for a horizontal face
-    if (mx >= 0 && mx < W && my >= 0 && my < H && rayBlocked(tiles[mp], frac)) { dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = tiles[mp]; }
+    if (mx >= 0 && mx < W && my >= 0 && my < H && rayBlocked(tiles[mp], frac)) { dof = maxdof; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = tiles[mp]; }
     else { rx += xo; ry += yo; dof++; }
   }
 
   if (disV < disH) {
-    const t = vy / U; // hit on a vertical face → texture runs along Y
-    return { dist: disV, vertical: true, tex: (t - Math.floor(t)) * 64, tile: vtile };
+    let f = vy / U; f -= Math.floor(f); // hit on a vertical face → texture runs along Y
+    if (isDoor(vtile)) f -= doorOpenFrac[vtile & 0x7f]; // texture rides the sliding panel
+    return { dist: disV, vertical: true, tex: f * 64, tile: vtile };
   }
-  const t = hx / U; // horizontal face → texture runs along X
-  return { dist: disH, vertical: false, tex: (t - Math.floor(t)) * 64, tile: htile };
+  let f = hx / U; f -= Math.floor(f); // horizontal face → texture runs along X
+  if (isDoor(htile)) f -= doorOpenFrac[htile & 0x7f];
+  return { dist: disH, vertical: false, tex: f * 64, tile: htile };
 }
 
 // ---------------------------------------------------------------------------

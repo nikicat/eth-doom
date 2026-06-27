@@ -58,7 +58,10 @@ static int wallpage(int v, int vertical) { return ((v < 1 ? 1 : v) - 1) * 2 + (v
  * covers fraction (1 - open) of the cell face (frac is 0..1 along that face). */
 static int ray_blocked(int v, float frac) {
     if (is_wall(v)) return 1;
-    if (is_door(v)) return frac < 1.0f - DOORF[v & 0x7f];
+    /* A door slides sideways into a wall pocket: solid where frac >= open (the panel,
+     * shrinking from the left as it opens), see-through before it. The texture rides
+     * the panel (offset by `open` in cast_ray), so it slides instead of being cropped. */
+    if (is_door(v)) return frac >= DOORF[v & 0x7f];
     return 0;
 }
 
@@ -75,19 +78,21 @@ static void cast_ray(double px, double py, double ra,
     double cs = cos(r * DR), sn = sin(r * DR);
     double rx, ry, xo, yo;
     double disV = 1e9, disH = 1e9, vy = py, hx = px;
-    int vtile = 1, htile = 1, dof;
+    /* step until a wall is hit or we cross the whole map (8 was a tiny-map default and
+     * dropped any wall more than 8 tiles across open space — far walls "disappeared"). */
+    int vtile = 1, htile = 1, dof, maxdof = (W > H ? W : H) + 1;
 
     /* vertical grid lines (x = k*U) */
     double Tan = tan(r * DR);
     dof = 0;
     if (cs > 0.001)       { rx = floor(px / U) * U + U;       ry = (px - rx) * Tan + py; xo = U;  yo = -xo * Tan; }
     else if (cs < -0.001) { rx = floor(px / U) * U - 0.0001;  ry = (px - rx) * Tan + py; xo = -U; yo = -xo * Tan; }
-    else                  { rx = px; ry = py; dof = 8; xo = yo = 0; }
-    while (dof < 8) {
+    else                  { rx = px; ry = py; dof = maxdof; xo = yo = 0; }
+    while (dof < maxdof) {
         int mx = (int)floor(rx / U), my = (int)floor(ry / U), mp = my * W + mx;
         double frac = ry / U - floor(ry / U);
         if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], (float)frac)) {
-            dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = TILES[mp];
+            dof = maxdof; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = TILES[mp];
         } else { rx += xo; ry += yo; dof++; }
     }
 
@@ -96,21 +101,23 @@ static void cast_ray(double px, double py, double ra,
     Tan = 1.0 / Tan;
     if (sn > 0.001)       { ry = floor(py / U) * U - 0.0001;  rx = (py - ry) * Tan + px; yo = -U; xo = -yo * Tan; }
     else if (sn < -0.001) { ry = floor(py / U) * U + U;       rx = (py - ry) * Tan + px; yo = U;  xo = -yo * Tan; }
-    else                  { rx = px; ry = py; dof = 8; xo = yo = 0; }
-    while (dof < 8) {
+    else                  { rx = px; ry = py; dof = maxdof; xo = yo = 0; }
+    while (dof < maxdof) {
         int mx = (int)floor(rx / U), my = (int)floor(ry / U), mp = my * W + mx;
         double frac = rx / U - floor(rx / U);
         if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], (float)frac)) {
-            dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = TILES[mp];
+            dof = maxdof; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = TILES[mp];
         } else { rx += xo; ry += yo; dof++; }
     }
 
     if (disV < disH) {
-        double t = vy / U;
-        *dist = disV; *vertical = 1; *tex = (t - floor(t)) * 64.0; *tile = vtile;
+        double f = vy / U; f -= floor(f);
+        if (is_door(vtile)) f -= DOORF[vtile & 0x7f]; /* texture rides the sliding panel */
+        *dist = disV; *vertical = 1; *tex = f * 64.0; *tile = vtile;
     } else {
-        double t = hx / U;
-        *dist = disH; *vertical = 0; *tex = (t - floor(t)) * 64.0; *tile = htile;
+        double f = hx / U; f -= floor(f);
+        if (is_door(htile)) f -= DOORF[htile & 0x7f];
+        *dist = disH; *vertical = 0; *tex = f * 64.0; *tile = htile;
     }
 }
 
