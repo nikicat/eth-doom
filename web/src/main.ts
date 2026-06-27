@@ -777,7 +777,7 @@ function renderDbg(s: State, tick: number, gas: number | null) {
   dbg.textContent =
     `level     ${levelName} ${W}x${H}\n` +
     `tick      ${tick}\n` +
-    `gas/input ${gas != null ? gas.toLocaleString() : "—"}\n` +
+    `gas/tick  ${gas != null ? `${(gas / 1000).toFixed(0)}k (${gas.toLocaleString("en-US")})` : "—"}\n` +
     `art       ${assets ? "real id (VSWAP)" : "procedural"}\n` +
     `guards    ${s.guards.length}\n` +
     `rndindex  ${s.rndindex}\n\n` +
