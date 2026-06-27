@@ -1084,23 +1084,27 @@ addEventListener("keydown", (e) => {
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
 const MOVE = 35; // forward/back/strafe input (≈ max thrust after MOVESCALE)
-const TURN = 200; // turn input; engine turns angleunits = controlx/ANGLESCALE(20) per tick
+// turn input. The engine turns controlx/ANGLESCALE(20) degrees per tic, so degrees/sec =
+// TURN/20 * TICK_HZ. Derive TURN for a comfortable ~140°/s at whatever TICK_HZ is set to
+// (was a fixed 200 = 700°/s once the tickrate was pinned at 70 — far too fast).
+const TURN = Math.round((140 / TICK_HZ) * 20);
+// Controls: W/S or ↑/↓ = forward/back; A/D = strafe; ←/→ = turn. (controlx is reused by
+// the engine for either turn or strafe per tic, so strafe takes precedence when both.)
 function cmd() {
   let controlx = 0, controly = 0, buttons = 0;
-  const strafe = keys.has("shift");
-  const left = keys.has("a") || keys.has("arrowleft");
-  const right = keys.has("d") || keys.has("arrowright");
   if (keys.has("w") || keys.has("arrowup")) controly = -MOVE;
   if (keys.has("s") || keys.has("arrowdown")) controly = MOVE;
-  if (strafe) {
+  const strafeL = keys.has("a"), strafeR = keys.has("d");
+  const turnL = keys.has("arrowleft"), turnR = keys.has("arrowright");
+  if (strafeL || strafeR) {
     // strafe: +controlx → right (engine thrusts toward angle-90), -controlx → left
-    if (left) controlx = -MOVE;
-    if (right) controlx = MOVE;
+    if (strafeL) controlx = -MOVE;
+    if (strafeR) controlx = MOVE;
     buttons |= 2; // BT_STRAFE
   } else {
     // turn: engine does angle -= controlx/ANGLESCALE, so +controlx = right, - = left
-    if (left) controlx = -TURN;
-    if (right) controlx = TURN;
+    if (turnL) controlx = -TURN;
+    if (turnR) controlx = TURN;
   }
   if (keys.has(" ")) buttons |= 1; // BT_ATTACK
   if (keys.has("e")) buttons |= 8; // BT_USE (open/close the door you face)
