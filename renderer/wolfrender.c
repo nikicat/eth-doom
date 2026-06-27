@@ -19,8 +19,8 @@
 
 #define TEXSZ 64       /* wall textures are 64x64 */
 #define DOOR_PAGE 98   /* VSWAP door wall texture page */
-#define FOV 60.0f
-#define U 64.0f        /* sage tile size */
+#define FOV 60.0
+#define U 64.0         /* sage tile size */
 
 static int W, H, VW, VH, NPAGES;
 static unsigned char *FB;     /* VW*VH*4 RGBA framebuffer */
@@ -63,58 +63,60 @@ static int ray_blocked(int v, float frac) {
 }
 
 /* Cast one ray; fill *dist (perp-less raw), *vertical, *tex (0..63), *tile. The DDA
- * mirrors the TS castRay it replaces (3DSage, MIT) so the view is byte-for-byte the
- * same shape; texture column follows id's HitVert/HitHorizWall (intercept fraction). */
-static void cast_ray(float px, float py, float ra,
-                     float *dist, int *vertical, float *tex, int *tile) {
-    const float DR = (float)M_PI / 180.0f;
-    float r = fmodf(fmodf(ra, 360.0f) + 360.0f, 360.0f);
-    float cs = cosf(r * DR), sn = sinf(r * DR);
-    float rx, ry, xo, yo;
-    float disV = 1e9f, disH = 1e9f, vy = py, hx = px;
+ * mirrors the TS castRay it replaces (3DSage, MIT) so the view is the same shape;
+ * texture column follows id's HitVert/HitHorizWall (intercept fraction). Uses DOUBLE
+ * precision to match JS's float64: the DDA's -0.0001 cell-boundary nudge is below
+ * float32 ULP at E1L1's large (thousands) coordinates, which would land rays in the
+ * wrong grid cell and skew walls. */
+static void cast_ray(double px, double py, double ra,
+                     double *dist, int *vertical, double *tex, int *tile) {
+    const double DR = M_PI / 180.0;
+    double r = fmod(fmod(ra, 360.0) + 360.0, 360.0);
+    double cs = cos(r * DR), sn = sin(r * DR);
+    double rx, ry, xo, yo;
+    double disV = 1e9, disH = 1e9, vy = py, hx = px;
     int vtile = 1, htile = 1, dof;
 
     /* vertical grid lines (x = k*U) */
-    float Tan = tanf(r * DR);
+    double Tan = tan(r * DR);
     dof = 0;
-    if (cs > 0.001f)       { rx = floorf(px / U) * U + U;       ry = (px - rx) * Tan + py; xo = U;  yo = -xo * Tan; }
-    else if (cs < -0.001f) { rx = floorf(px / U) * U - 0.0001f; ry = (px - rx) * Tan + py; xo = -U; yo = -xo * Tan; }
-    else                   { rx = px; ry = py; dof = 8; xo = yo = 0; }
+    if (cs > 0.001)       { rx = floor(px / U) * U + U;       ry = (px - rx) * Tan + py; xo = U;  yo = -xo * Tan; }
+    else if (cs < -0.001) { rx = floor(px / U) * U - 0.0001;  ry = (px - rx) * Tan + py; xo = -U; yo = -xo * Tan; }
+    else                  { rx = px; ry = py; dof = 8; xo = yo = 0; }
     while (dof < 8) {
-        int mx = (int)floorf(rx / U), my = (int)floorf(ry / U), mp = my * W + mx;
-        float frac = ry / U - floorf(ry / U);
-        if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], frac)) {
+        int mx = (int)floor(rx / U), my = (int)floor(ry / U), mp = my * W + mx;
+        double frac = ry / U - floor(ry / U);
+        if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], (float)frac)) {
             dof = 8; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = TILES[mp];
         } else { rx += xo; ry += yo; dof++; }
     }
 
     /* horizontal grid lines (y = k*U) */
     dof = 0;
-    Tan = 1.0f / Tan;
-    if (sn > 0.001f)       { ry = floorf(py / U) * U - 0.0001f; rx = (py - ry) * Tan + px; yo = -U; xo = -yo * Tan; }
-    else if (sn < -0.001f) { ry = floorf(py / U) * U + U;       rx = (py - ry) * Tan + px; yo = U;  xo = -yo * Tan; }
-    else                   { rx = px; ry = py; dof = 8; xo = yo = 0; }
+    Tan = 1.0 / Tan;
+    if (sn > 0.001)       { ry = floor(py / U) * U - 0.0001;  rx = (py - ry) * Tan + px; yo = -U; xo = -yo * Tan; }
+    else if (sn < -0.001) { ry = floor(py / U) * U + U;       rx = (py - ry) * Tan + px; yo = U;  xo = -yo * Tan; }
+    else                  { rx = px; ry = py; dof = 8; xo = yo = 0; }
     while (dof < 8) {
-        int mx = (int)floorf(rx / U), my = (int)floorf(ry / U), mp = my * W + mx;
-        float frac = rx / U - floorf(rx / U);
-        if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], frac)) {
+        int mx = (int)floor(rx / U), my = (int)floor(ry / U), mp = my * W + mx;
+        double frac = rx / U - floor(rx / U);
+        if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], (float)frac)) {
             dof = 8; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = TILES[mp];
         } else { rx += xo; ry += yo; dof++; }
     }
 
     if (disV < disH) {
-        float t = vy / U;
-        *dist = disV; *vertical = 1; *tex = (t - floorf(t)) * 64.0f; *tile = vtile;
+        double t = vy / U;
+        *dist = disV; *vertical = 1; *tex = (t - floor(t)) * 64.0; *tile = vtile;
     } else {
-        float t = hx / U;
-        *dist = disH; *vertical = 0; *tex = (t - floorf(t)) * 64.0f; *tile = htile;
+        double t = hx / U;
+        *dist = disH; *vertical = 0; *tex = (t - floor(t)) * 64.0; *tile = htile;
     }
 }
 
-EMSCRIPTEN_KEEPALIVE void render(double pxd, double pyd, double pad) {
-    float px = (float)pxd, py = (float)pyd, pa = (float)pad;
-    const float DR = (float)M_PI / 180.0f;
-    float PROJ = VW / 2.0f / tanf((FOV / 2.0f) * DR);
+EMSCRIPTEN_KEEPALIVE void render(double px, double py, double pa) {
+    const double DR = M_PI / 180.0;
+    double PROJ = VW / 2.0 / tan((FOV / 2.0) * DR);
 
     /* ceiling 0x383838 (top) / floor 0x717171 (bottom) — Wolf3D flat colors */
     for (int y = 0; y < VH; y++) {
@@ -126,28 +128,28 @@ EMSCRIPTEN_KEEPALIVE void render(double pxd, double pyd, double pad) {
     }
 
     for (int c = 0; c < VW; c++) {
-        float ra = pa + FOV / 2.0f - ((c + 0.5f) / VW) * FOV;
-        float dist, texf; int vertical, tile;
+        double ra = pa + FOV / 2.0 - ((c + 0.5) / VW) * FOV;
+        double dist, texf; int vertical, tile;
         cast_ray(px, py, ra, &dist, &vertical, &texf, &tile);
 
-        float perp = fmaxf(0.0001f, dist * cosf((pa - ra) * DR)); /* fisheye fix */
-        ZB[c] = perp;
-        float lineH = (U / perp) * PROJ;
+        double perp = fmax(0.0001, dist * cos((pa - ra) * DR)); /* fisheye fix */
+        ZB[c] = (float)perp;
+        double lineH = (U / perp) * PROJ;
         if (lineH > VH * 3) lineH = VH * 3;
-        float topf = VH / 2.0f - lineH / 2.0f;
-        float shade = fmaxf(0.16f, fminf(1.0f, 1.25f - perp / 760.0f));
-        float bright = vertical ? shade : fmaxf(0.1f, shade - 0.22f); /* darken N/S faces */
+        double topf = VH / 2.0 - lineH / 2.0;
+        double shade = fmax(0.16, fmin(1.0, 1.25 - perp / 760.0));
+        double bright = vertical ? shade : fmax(0.1, shade - 0.22); /* darken N/S faces */
         int door = is_door(tile);
         int page = door ? DOOR_PAGE : wallpage(tile, vertical);
         int has = page < NPAGES && TEXOK[page];
         int sx = (int)texf; if (sx < 0) sx = 0; if (sx > 63) sx = 63;
 
-        int y0 = (int)floorf(topf), y1 = (int)floorf(topf + lineH);
+        int y0 = (int)floor(topf), y1 = (int)floor(topf + lineH);
         for (int y = y0; y < y1; y++) {
             if (y < 0 || y >= VH) continue;
             unsigned char r, g, b;
             if (has) {
-                int row = (int)(((y - topf) / lineH) * 64.0f);
+                int row = (int)(((y - topf) / lineH) * 64.0);
                 if (row < 0) row = 0; if (row > 63) row = 63;
                 unsigned char *t = &TEX[(((size_t)page * 64 + row) * 64 + sx) * 4];
                 r = (unsigned char)(t[0] * bright); g = (unsigned char)(t[1] * bright); b = (unsigned char)(t[2] * bright);
