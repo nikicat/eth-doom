@@ -11,8 +11,10 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 
 - **Player movement** — turn/strafe/forward/back with tile collision (`ControlMovement`/`Thrust`/
   `ClipMove`/`TryMove`).
-- **Guard AI** — a guard chases the player (`T_Chase`, `SelectChaseDir`/`SelectDodgeDir`,
-  `MoveObj`, `TryWalk`, `CheckLine` line-of-sight) driven by Wolf3D's deterministic RNG.
+- **Guard AI** — a guard stands dormant until it **sees the player** (`T_Stand`/`SightPlayer`/
+  `CheckSight`: cardinal-facing FOV + `CheckLine` LOS + `MINSIGHT` auto-close) or **hears gunfire**,
+  reacts after a short delay (`FirstSighting`), then chases (`T_Chase`, `SelectChaseDir`/
+  `SelectDodgeDir`, `MoveObj`, `TryWalk`) — all driven by Wolf3D's deterministic RNG.
 - **Two-way combat** — the guard shoots the player (`T_Shoot` → `TakeDamage`, health drops); the
   player fires back (`GunAttack` → `DamageActor` → pain → `KillActor` death), with ammo + a fire
   cooldown.
@@ -41,7 +43,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2a** RNG + actor model | ✅ | deterministic `rndtable`/`US_RndT`; `objtype`/`DoActor` state machine; multi-actor packed state |
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
-| **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; doors/pickups/other enemy types + `SessionFactory` ⬜ |
+| **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** (`T_Stand`/`SightPlayer`/`CheckSight`) ✅; doors/pickups/other enemy types + `SessionFactory` ⬜ |
 | **M4** MegaETH + UX | ⬜ | deploy to MegaETH; session-key delegation + auto-signing; WASM Wolf3D-port renderer; client prediction |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
@@ -81,7 +83,7 @@ anvil --silent &
 
 - **Gas**: state re-pack ✅ and SSTORE2 map ✅ are done; the remaining levers are per-actor
   packing (re-encoding every actor each tick) and capping live-actor count.
-- **M3**: dormant guards + line-of-sight (`T_Stand`/`SightPlayer` — restore the faithful behavior;
-  our port currently spawns guards alerted), doors + `CheckLine` door logic, pickups, other enemy
-  types (dog/SS/officer), actor-vs-actor `actorat` collision, `SessionFactory`.
+- **M3**: dormant guards + line-of-sight ✅ (guards stand until they see you / hear gunfire); next:
+  doors + `CheckLine` door logic, pickups, other enemy types (dog/SS/officer), actor-vs-actor
+  `actorat` collision, `SessionFactory`.
 - **M4**: MegaETH deploy (plain redeploy), popup-free play via session keys, first-person renderer.

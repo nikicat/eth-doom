@@ -82,10 +82,15 @@ are deviations from id's *render-coupled* code, not between our two implementati
   faithful; only the screen-pixel `shootdelta` cone (render-config-specific) is dropped.
 - **Weapon animation → cooldown.** The `Cmd_Fire`/`T_Attack`/`attackinfo` weapon state machine is
   replaced by a simple per-tick fire cooldown (`ATTACKRATE`).
+- **All actors think every tic.** Wolf3D gates an actor's processing on `ob->active`, which the
+  renderer flips on when the actor is drawn. Headless, there's no renderer, so we process every
+  actor every tic (like `FL_VISABLE`, an identical-on-both-sides choice). This is what lets a
+  dormant guard run `T_Stand`/`SightPlayer` and wake on line-of-sight without screen activation.
 - **Single-area map, no doors (yet).** `areanumber`/`areabyplayer` connectivity is collapsed to a
-  single area; `CheckLine`'s door branch is dead code until M3 adds doors.
-- **No `actorat` grid for one guard.** With a single guard there's no actor-vs-actor collision, so
-  `TryWalk` checks walls directly. Multiple guards (M3) reintroduce the grid.
+  single area; `CheckLine`'s door branch is dead code until M3 adds doors. One side effect: gunfire
+  (`madenoise`) alerts *all* guards, since everything is one area until doors localize sound.
+- **No `actorat` grid yet.** Guards don't collide with each other (`TryWalk` checks walls only); with
+  many guards in a real level this lets them overlap. Actor-vs-actor collision is still to come.
 
 ## Tooling
 

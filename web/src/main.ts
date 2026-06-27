@@ -53,7 +53,7 @@ function initTestRoom() {
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) tiles[y * W + x] = MAP[y][x] === "#" ? 1 : 0;
   spawnTile = { x: 8, y: 8, dir: 1 };
-  guardTiles = [[12, 8]];
+  guardTiles = [[12, 8, 2]]; // facing west (dir*2) toward the player so it sees you
   levelName = "test room";
 }
 initTestRoom();
@@ -68,10 +68,10 @@ async function loadLevel(): Promise<boolean> {
     spawnTile = { x: L.spawn.x, y: L.spawn.y, dir: L.spawn.dir };
     levelName = L.name ?? "level";
     guardTiles = (L.guards as number[][])
-      .map(([x, y]) => ({ x, y, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
+      .map(([x, y, dir]) => ({ x, y, dir: dir ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
       .sort((a, b) => a.d - b.d)
       .slice(0, MAX_GUARDS)
-      .map((g) => [g.x, g.y]);
+      .map((g) => [g.x, g.y, g.dir]);
     return true;
   } catch {
     return false;
@@ -87,7 +87,7 @@ function tilesHex(): Hex {
 // guards blob: 3 bytes each (tilex, tiley, dir) — engine spawns them alerted
 function guardsHex(): Hex {
   const b = new Uint8Array(guardTiles.length * 3);
-  guardTiles.forEach(([x, y], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = 0; });
+  guardTiles.forEach(([x, y, dir], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = (dir ?? 0) & 3; });
   return bytesToHex(b);
 }
 

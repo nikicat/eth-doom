@@ -155,7 +155,7 @@ fn main() -> Result<()> {
             if (19..=22).contains(&t) {
                 spawn = Some((x, y, (t - 19) as u8)); // dir: N=0 E=1 S=2 W=3
             } else if is_guard(t) {
-                guards.push([x, y]);
+                guards.push([x, y, (t & 3) as usize]); // facing 0..3 (each 4-code group)
             }
         }
     }

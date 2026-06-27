@@ -15,12 +15,14 @@ run() { # <name> <map> <sx> <sy> <dir>
 
 run move_basic test_room.txt 8 8 1
 
-# chase: a guard at (12,8) chases an idle player at (8,8)
-"$ORACLE" oracle/maps/test_room.txt vectors/chase_guard.input.txt 8 8 1 12 8 4 \
+# chase: a dormant guard at (12,8) faces west (dir 2 -> dirtype west), sees the
+# idle player at (8,8) via T_Stand/SightPlayer, then chases.
+"$ORACLE" oracle/maps/test_room.txt vectors/chase_guard.input.txt 8 8 1 12 8 2 \
     > vectors/chase_guard.golden.jsonl
 
-# kill: player at (4,8) faces east and fires; guard at (12,8) approaches and dies
-"$ORACLE" oracle/maps/test_room.txt vectors/kill_guard.input.txt 4 8 1 12 8 4 \
+# kill: player at (4,8) faces east and fires (the noise wakes the guard); the
+# guard at (12,8) approaches and dies.
+"$ORACLE" oracle/maps/test_room.txt vectors/kill_guard.input.txt 4 8 1 12 8 2 \
     > vectors/kill_guard.golden.jsonl
 
 echo "regenerated:"

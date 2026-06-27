@@ -17,6 +17,7 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define TILEGLOBAL    GLOBAL1         /* world units per tile */
 #define TILESHIFT     16L
 #define MINDIST       0x5800L         /* 22528 */
+#define MINSIGHT      0x18000L        /* CheckSight auto-see radius */
 #define PLAYERSIZE    MINDIST         /* player half-extent */
 #define MINACTORDIST  0x10000L
 #define ANGLES        360
@@ -51,6 +52,7 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define FL_NEVERMARK   4
 #define FL_ATTACKMODE  16
 #define FL_FIRSTATTACK 32
+#define FL_AMBUSH      64
 #define FL_NONMARK     128
 
 /* WL_DEF.H dirtype — order matters (opposite[]/diagonal[][] indexing). */
@@ -95,6 +97,7 @@ typedef struct objstruct {
     int      hitpoints;
     long     speed;
     int      temp1;
+    int      temp2;         /* sight reaction countdown (SightPlayer) */
 } objtype;
 
 /* --- globals (defined in wl_sim.c) --- */
@@ -108,6 +111,7 @@ extern long  playerxmove, playerymove;
 extern long  thrustspeed;               /* total player thrust this tic (T_Shoot) */
 extern int   health, playerdead;        /* gamestate.health; ex_died flag */
 extern int   ammo, attackcount;         /* gamestate.ammo; fire cooldown */
+extern int   madenoise;                 /* player fired this tic (alerts guards) */
 
 extern objtype  playerent;
 extern objtype *player;
@@ -136,6 +140,9 @@ void InitActors(void);                     /* clear lists, seed actorat from wal
 void SpawnGuard(int tilex, int tiley, int dir);
 void DoActor(objtype *ob);                 /* WL_PLAY.C state-machine advance */
 void PlayerAttack(int buttons);            /* fire cooldown + GunAttack hitscan */
+int  CheckSight(objtype *ob);              /* WL_STATE.C: FOV + LOS to player */
+int  SightPlayer(objtype *ob);             /* WL_STATE.C: react + countdown */
+void FirstSighting(objtype *ob);           /* WL_STATE.C: wake guard into chase */
 
 /* --- API --- */
 void  BuildTables(void);                 /* WL_MAIN.C */

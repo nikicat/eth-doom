@@ -107,6 +107,7 @@ int main(int argc, char **argv)
         ControlMovement(player);
         plux = player->x >> UNSIGNEDSHIFT;
         pluy = player->y >> UNSIGNEDSHIFT;
+        madenoise = 0;
         PlayerAttack(btns);
         for (int e = 0; e < numenemies; e++)
             DoActor(&enemies[e]);

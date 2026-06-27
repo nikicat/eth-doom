@@ -18,6 +18,7 @@ int      health = 100;   /* gamestate.health */
 int      playerdead;     /* playstate == ex_died */
 int      ammo = STARTAMMO;
 int      attackcount;    /* fire cooldown */
+int      madenoise;      /* player fired this tic (alerts guards in the area) */
 
 static unsigned char areabyplayer[64];   /* single-area map: all reachable */
 static int doorposition[256];             /* no doors in M2 (kept for CheckLine) */
@@ -365,7 +366,55 @@ static void T_Chase(objtype *ob) {
     }
 }
 
-static void T_Stand(objtype *ob) { (void)ob; }   /* SightPlayer — M2b+ */
+/* WL_STATE.C CheckSight: area connected + auto-see-if-close + facing FOV + LOS. */
+int CheckSight(objtype *ob) {
+    long deltax, deltay;
+    if (!areabyplayer[ob->areanumber]) return 0;
+    deltax = player->x - ob->x;
+    deltay = player->y - ob->y;
+    if (deltax > -MINSIGHT && deltax < MINSIGHT && deltay > -MINSIGHT && deltay < MINSIGHT)
+        return 1;                       /* very close: automatic */
+    switch (ob->dir) {                  /* only cardinal facings restrict the view */
+    case north: if (deltay > 0) return 0; break;
+    case east:  if (deltax < 0) return 0; break;
+    case south: if (deltay < 0) return 0; break;
+    case west:  if (deltax > 0) return 0; break;
+    }
+    return CheckLine(ob);
+}
+
+/* WL_STATE.C FirstSighting (guard): wake into chase, 3x speed, attack flags. */
+void FirstSighting(objtype *ob) {
+    NewState(ob, S_GRDCHASE1);
+    ob->speed *= 3;
+    if (ob->distance < 0) ob->distance = 0;
+    ob->flags |= FL_ATTACKMODE | FL_FIRSTATTACK;
+}
+
+/* WL_STATE.C SightPlayer: first sight starts a reaction timer; on expiry, wake.
+ * (Boss/other-class reaction values dropped — guard only.) */
+int SightPlayer(objtype *ob) {
+    if (ob->flags & FL_ATTACKMODE) return 1;   /* already alerted */
+    if (ob->temp2) {
+        ob->temp2 -= tics;             /* count down reaction time */
+        if (ob->temp2 > 0) return 0;
+        ob->temp2 = 0;                 /* time to react */
+    } else {
+        if (!areabyplayer[ob->areanumber]) return 0;
+        if (ob->flags & FL_AMBUSH) {
+            if (!CheckSight(ob)) return 0;
+            ob->flags &= ~FL_AMBUSH;
+        } else if (!madenoise && !CheckSight(ob)) {
+            return 0;
+        }
+        ob->temp2 = 1 + US_RndT() / 4;  /* guard reaction delay */
+        return 0;
+    }
+    FirstSighting(ob);
+    return 1;
+}
+
+static void T_Stand(objtype *ob) { SightPlayer(ob); }
 
 /* WL_AGENT.C TakeDamage (core: rendering/flash/difficulty=baby/godmode dropped). */
 static void TakeDamage(int points, objtype *attacker) {
@@ -465,6 +514,7 @@ void PlayerAttack(int buttons) {
     if (attackcount > 0) attackcount--;
     if ((buttons & 1) && attackcount == 0 && ammo > 0) { /* bt_attack = bit 0 */
         ammo--;
+        madenoise = 1;          /* firing alerts guards in the area */
         GunAttack();
         attackcount = ATTACKRATE;
     }
@@ -543,21 +593,17 @@ void SpawnGuard(int tilex, int tiley, int dir) {
     ob->tiley = tiley;
     ob->x = ((long)tilex << TILESHIFT) + TILEGLOBAL / 2;
     ob->y = ((long)tiley << TILESHIFT) + TILEGLOBAL / 2;
-    ob->dir = nodir;
     ob->areanumber = 0;
     actorat[tilex][tiley] = ob;
 
-    /* SpawnStand(en_guard) */
+    /* SpawnStand(en_guard): dormant, facing a cardinal dir (dir*2), patrol speed.
+     * It wakes via T_Stand -> SightPlayer (LOS or noise), not at spawn. `active`
+     * stays ac_yes so the headless sim keeps running its think every tic. */
+    ob->dir = (dir & 3) * 2;          /* 4-way 0..3 -> dirtype east/north/west/south */
     ob->obclass = guardobj;
     ob->speed = SPDPATROL;
     ob->flags = FL_SHOOTABLE;
     ob->hitpoints = 25;
-
-    /* FirstSighting(guard): chase, 3x speed, attack flags */
+    ob->temp2 = 0;
     ob->active = ac_yes;
-    NewState(ob, S_GRDCHASE1);
-    ob->speed *= 3;
-    ob->flags |= FL_ATTACKMODE | FL_FIRSTATTACK;
-
-    (void)dir;
 }

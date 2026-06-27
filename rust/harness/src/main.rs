@@ -165,9 +165,9 @@ async fn main() -> Result<()> {
         ("move_basic", "oracle/maps/test_room.txt", "vectors/move_basic.input.txt",
          "vectors/move_basic.golden.jsonl", (8, 8, 1), vec![]),
         ("chase_guard", "oracle/maps/test_room.txt", "vectors/chase_guard.input.txt",
-         "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 4]),
+         "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 2]),
         ("kill_guard", "oracle/maps/test_room.txt", "vectors/kill_guard.input.txt",
-         "vectors/kill_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 4]),
+         "vectors/kill_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2]),
     ];
 
     for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {

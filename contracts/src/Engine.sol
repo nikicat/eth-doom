@@ -17,6 +17,7 @@ contract Engine {
     // --- WL_DEF.H constants ---
     int256 internal constant TILEGLOBAL = 0x10000;
     int256 internal constant MINDIST = 0x5800;
+    int256 internal constant MINSIGHT = 0x18000; // CheckSight auto-see radius
     int256 internal constant PLAYERSIZE = MINDIST;
     int256 internal constant MINACTORDIST = 0x10000;
     int256 internal constant ANGLES = 360;
@@ -44,6 +45,7 @@ contract Engine {
     uint8 internal constant FL_NEVERMARK = 4;
     uint8 internal constant FL_ATTACKMODE = 16;
     uint8 internal constant FL_FIRSTATTACK = 32;
+    uint8 internal constant FL_AMBUSH = 64;
 
     // think / action ids
     uint256 internal constant TH_STAND = 1;
@@ -90,6 +92,7 @@ contract Engine {
         uint8 obclass;
         int256 speed;
         uint8 active;
+        int256 temp2; // sight reaction countdown (SightPlayer)
     }
 
     struct Cmd {
@@ -111,6 +114,7 @@ contract Engine {
         int256 plux;
         int256 pluy;
         int256 thrustspeed;
+        bool madenoise; // player fired this tic (alerts guards in the area)
     }
 
     // ---------------- public API ----------------
@@ -131,7 +135,7 @@ contract Engine {
         uint256 n = guards.length / 3;
         wd.actors = new Actor[](n);
         for (uint256 i = 0; i < n; i++) {
-            _spawnGuard(wd.actors[i], uint8(guards[i * 3]), uint8(guards[i * 3 + 1]));
+            _spawnGuard(wd.actors[i], uint8(guards[i * 3]), uint8(guards[i * 3 + 1]), uint8(guards[i * 3 + 2]));
         }
         return _pack(wd);
     }
@@ -172,20 +176,23 @@ contract Engine {
         wd.rnd = Rng.table();
     }
 
-    /// WL_ACT2.C SpawnStand(en_guard) + FirstSighting(guard): spawn alerted, in
-    /// chase, at 3x patrol speed.
-    function _spawnGuard(Actor memory a, uint256 tilex, uint256 tiley) internal pure {
+    /// WL_ACT2.C SpawnStand(en_guard): spawn dormant (standing), facing a cardinal
+    /// direction (dir*2), at patrol speed. It wakes via T_Stand -> SightPlayer (LOS
+    /// or noise), not at spawn. `active` stays ac_yes so the headless sim keeps
+    /// running its think every tic.
+    function _spawnGuard(Actor memory a, uint256 tilex, uint256 tiley, uint256 dir) internal pure {
         a.tilex = tilex;
         a.tiley = tiley;
         a.x = (int256(tilex) << 16) + TILEGLOBAL / 2;
         a.y = (int256(tiley) << 16) + TILEGLOBAL / 2;
-        a.dir = NODIR;
+        a.dir = int256((dir & 3) * 2); // 4-way 0..3 -> dirtype east/north/west/south
+        a.state = S_GRDSTAND; // tictime 0 -> ticcount 0, think runs each tic
         a.obclass = 3; // guardobj
         a.hitpoints = 25;
         a.active = 1; // ac_yes
-        a.flags = FL_SHOOTABLE | FL_ATTACKMODE | FL_FIRSTATTACK;
-        _newState(a, S_GRDCHASE1); // ticcount = tictime(chase1)=10
-        a.speed = SPDPATROL * 3; // 1536
+        a.flags = FL_SHOOTABLE;
+        a.speed = SPDPATROL;
+        a.temp2 = 0;
     }
 
     // ---------------- player movement (WL_AGENT.C) ----------------
@@ -584,6 +591,7 @@ contract Engine {
         if (wd.p.attackcount > 0) wd.p.attackcount -= 1;
         if ((cmd.buttons & 1) != 0 && wd.p.attackcount == 0 && wd.p.ammo > 0) {
             wd.p.ammo -= 1;
+            wd.madenoise = true; // firing alerts guards in the area
             _gunAttack(wd);
             wd.p.attackcount = ATTACKRATE;
         }
@@ -677,7 +685,49 @@ contract Engine {
 
     function _think(World memory wd, Actor memory a, uint256 id) internal pure {
         if (id == TH_CHASE) _tChase(wd, a);
-        // TH_STAND (SightPlayer) and TH_PATH stubbed for later milestones
+        else if (id == TH_STAND) _sightPlayer(wd, a); // T_Stand
+    }
+
+    /// WL_STATE.C CheckSight: area connected + auto-see-if-close + facing FOV + LOS.
+    function _checkSight(World memory wd, Actor memory a) internal pure returns (bool) {
+        int256 deltax = wd.p.x - a.x;
+        int256 deltay = wd.p.y - a.y;
+        if (deltax > -MINSIGHT && deltax < MINSIGHT && deltay > -MINSIGHT && deltay < MINSIGHT)
+            return true; // very close: automatic
+        // only cardinal facings restrict the view cone
+        if (a.dir == NORTH) { if (deltay > 0) return false; }
+        else if (a.dir == EAST) { if (deltax < 0) return false; }
+        else if (a.dir == SOUTH) { if (deltay < 0) return false; }
+        else if (a.dir == WEST) { if (deltax > 0) return false; }
+        return _checkLine(wd, a);
+    }
+
+    /// WL_STATE.C FirstSighting (guard): wake into chase, 3x speed, attack flags.
+    function _firstSighting(Actor memory a) internal pure {
+        _newState(a, S_GRDCHASE1);
+        a.speed *= 3;
+        if (a.distance < 0) a.distance = 0;
+        a.flags |= FL_ATTACKMODE | FL_FIRSTATTACK;
+    }
+
+    /// WL_STATE.C SightPlayer: first sight starts a reaction timer; on expiry, wake.
+    function _sightPlayer(World memory wd, Actor memory a) internal pure {
+        if ((a.flags & FL_ATTACKMODE) != 0) return; // already alerted
+        if (a.temp2 != 0) {
+            a.temp2 -= TICS;
+            if (a.temp2 > 0) return;
+            a.temp2 = 0; // time to react
+        } else {
+            if ((a.flags & FL_AMBUSH) != 0) {
+                if (!_checkSight(wd, a)) return;
+                a.flags &= ~FL_AMBUSH;
+            } else if (!wd.madenoise && !_checkSight(wd, a)) {
+                return;
+            }
+            a.temp2 = 1 + int256(_rnd(wd)) / 4; // guard reaction delay
+            return;
+        }
+        _firstSighting(a);
     }
 
     function _action(World memory wd, Actor memory a, uint256 id) internal pure {
@@ -828,6 +878,7 @@ contract Engine {
         w |= uint256(a.obclass) << 168;
         w |= uint256(uint32(int32(a.speed))) << 176;
         w |= uint256(a.active) << 208;
+        w |= uint256(uint16(int16(a.temp2))) << 216;
     }
 
     function _unpackActor(uint256 w) internal pure returns (Actor memory a) {
@@ -844,5 +895,6 @@ contract Engine {
         a.obclass = uint8(w >> 168);
         a.speed = int256(int32(uint32(w >> 176)));
         a.active = uint8(w >> 208);
+        a.temp2 = int256(int16(uint16(w >> 216)));
     }
 }
