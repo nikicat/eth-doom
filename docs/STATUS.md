@@ -73,7 +73,18 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
 | **M3** world completeness | ✅ | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (4-shot burst, 100 HP) ✅; **dog** (melee, 1 HP) ✅; **officer** (speed ×5, 50 HP) ✅ — full E1 roster; **`SessionFactory`** (many games, one engine/map) ✅ |
-| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; **web burner/auto-sign UX** — the client owns the session, delegates an ephemeral burner once, and auto-signs every tick with it (no popup per input) ✅; **client-side prediction** — the carved C sim compiled to wasm (clang `--target=wasm32`, no Emscripten) predicts each tick locally for instant feedback, reconciled byte-for-byte against the chain (live 936/936 match on E1L1) ✅; **wasm wall renderer** — id's `WL_DRAW.C` wall math (perspective height + texture-coordinate selection) plus a portable grid-DDA ray cast, compiled with **Emscripten**, rendering the textured wall view + per-column depth into a framebuffer the client blits (sprites/gun/HUD stay in TS on top) ✅; next: MegaETH deploy (needs RPC + funded key), optional full Wolf4SDL framework port |
+| **M4** on-chain UX + client engine | ✅ | **session-key delegation** (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`); **`Deploy.s.sol`** one-command stack deploy (test room or a real level via `MAP_JSON`); **web burner/auto-sign UX**; **client-side prediction** — the carved C sim compiled to wasm (clang `--target=wasm32`) predicts locally, reconciled byte-for-byte vs the chain by a parallel reconciler; **wasm wall renderer** (Emscripten, id's `WL_DRAW.C` math) + the player **death sequence**; **fixed-timestep 70-tics/s** via fire-and-forget pipelined submission; **area connectivity** — faithful sound localization (`ConnectAreas`/`areabyplayer`) |
+
+### Roadmap (fresh milestone set)
+
+| | status | scope |
+|---|---|---|
+| **M5** authentic Wolf3D look | ⬜ | flat lighting (no distance shading); decorative scenery sprites; real per-class enemy sprites + frame tables; 320×200 / 4:3 chunky view + framed viewport; HUD polish (weapon slot, animated BJ face, counters) |
+| **M6** weapons & world completeness | ⬜ | weapon roster + switching (knife/pistol/MG/chaingun); pushwalls (secret walls); elevator + level exit + level→level flow; blocking-decoration collision |
+| **M7** audio | ⬜ | digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas |
+| **M8** presentation shell | ⬜ | title / menu / "Get Psyched!" / level-intermission tally / episode flow |
+| **M9** MegaETH deployment | ⛔ | deploy to MegaETH testnet; fire-and-forget session-key play at ~native rate; end-to-end latency + gas (needs an RPC + funded key) |
+| **M10** multiplayer | ⬜ | N-player shared `Session` (players as actors) + join/identity + session keys; chain-as-lockstep tick model (input log + paced advance); PvP/co-op (public-state caveat) |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
 
