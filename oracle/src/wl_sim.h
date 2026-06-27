@@ -81,10 +81,11 @@ typedef enum { nothing, playerobj, inertobj, guardobj, officerobj, ssobj, dogobj
 enum { en_guard, en_officer, en_ss, en_dog };
 
 /* WL_ACT2.C starthitpoints[BABY] — our sim runs at difficulty 0 (guard=25). */
-#define HP_GUARD 25
-#define HP_SS    100
-#define HP_DOG   1
-#define SPDDOG   1500L           /* dogs are faster than SPDPATROL (512) */
+#define HP_GUARD   25
+#define HP_SS      100
+#define HP_DOG     1
+#define HP_OFFICER 50
+#define SPDDOG     1500L         /* dogs are faster than SPDPATROL (512) */
 
 /* activetype */
 enum { ac_no, ac_yes, ac_allways };
@@ -116,6 +117,13 @@ enum {
     S_DOGCHASE1, S_DOGCHASE1S, S_DOGCHASE2, S_DOGCHASE3, S_DOGCHASE3S, S_DOGCHASE4,
     S_DOGJUMP1, S_DOGJUMP2, S_DOGJUMP3, S_DOGJUMP4, S_DOGJUMP5,
     S_DOGDIE1, S_DOGDIE2, S_DOGDIE3, S_DOGDEAD,
+    /* officer: like the guard (T_Chase/T_Shoot) but speed x5, 50 HP, constant
+     * reaction time, faster single shot, and 5 die frames. */
+    S_OFCSTAND,
+    S_OFCCHASE1, S_OFCCHASE1S, S_OFCCHASE2, S_OFCCHASE3, S_OFCCHASE3S, S_OFCCHASE4,
+    S_OFCSHOOT1, S_OFCSHOOT2, S_OFCSHOOT3,
+    S_OFCDIE1, S_OFCDIE2, S_OFCDIE3, S_OFCDIE4, S_OFCDIE5,
+    S_OFCPAIN, S_OFCPAIN1,
     NUMSTATES
 };
 

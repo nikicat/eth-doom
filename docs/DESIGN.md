@@ -108,14 +108,15 @@ are deviations from id's *render-coupled* code, not between our two implementati
   *localize sound* — gunfire (`madenoise`) alerts every guard, not just those in connected areas.
   Door-jamb side textures (`|0x40`) and the `actorat` adjacency checks in `CloseDoor`/`DoorClosing`
   (no actor grid) are likewise dropped. Applied identically in the oracle and Solidity.
-- **Enemy classes share one state table + AI.** Guard, SS, and dog live in the same flat `gstates[]`
-  graph (0–15 guard, 16–37 SS, 38–53 dog). Guard/SS reuse `T_Chase`/`T_Shoot`; the dog has its own
-  `T_DogChase` (no LOS — rushes via `SelectDodgeDir` and leaps to `T_Bite` at melee range) and uses
-  CHECKDIAG on cardinals (it can't open doors). Stats and the shoot/die/pain target state are by
-  `obclass`, and `FirstSighting` (chase state + speed ×3/×4/×2) and the sight-reaction delay are
-  class-specific — a faithfulness detail that was hardcoded to the guard until the dog forced it out
-  (the consistent-but-wrong oracle+Engine had hidden it from the differential). Spawns carry a class
-  byte (`tilex,tiley,dir,class`); the officer spawns as a guard until ported.
+- **Enemy classes share one state table + AI.** The full E1 roster lives in one flat `gstates[]` graph
+  (0–15 guard, 16–37 SS, 38–53 dog, 54–70 officer). Guard/SS/officer reuse `T_Chase`/`T_Shoot`; the dog
+  has its own `T_DogChase` (no LOS — rushes via `SelectDodgeDir` and leaps to `T_Bite` at melee range)
+  and uses CHECKDIAG on cardinals (it can't open doors). Stats and the shoot/die/pain target state are
+  by `obclass`, and `FirstSighting` (chase state + speed ×3/×4/×5/×2) and the sight-reaction delay
+  (random for guard/SS/dog, a constant `2` with NO RNG draw for the officer) are class-specific — a
+  faithfulness detail that was hardcoded to the guard until the dog/officer forced it out (the
+  consistent-but-wrong oracle+Engine had hidden it from the differential). Spawns carry a class byte
+  (`tilex,tiley,dir,class`).
 - **Actor-vs-actor collision** is modeled by scanning the actor list for a shootable actor on the
   target tile, rather than id's `actorat` grid — equivalent here because each actor's `(tilex,tiley)`
   is its grid mark (id's clear-at-start/mark-at-end falls out of reading live positions in actor

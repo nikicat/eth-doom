@@ -108,6 +108,24 @@ const statedef gstates[NUMSTATES] = {
     [S_DOGDIE2]    = { 15, TH_NONE,     AC_NONE,        S_DOGDIE3 },
     [S_DOGDIE3]    = { 15, TH_NONE,     AC_NONE,        S_DOGDEAD },
     [S_DOGDEAD]    = { 0,  TH_NONE,     AC_NONE,        S_DOGDEAD },
+    /* WL_ACT2.C officer: guard-like, but a faster single shot (6/20/10) + 5 die frames. */
+    [S_OFCSTAND]   = { 0,  TH_STAND, AC_NONE,        S_OFCSTAND },
+    [S_OFCCHASE1]  = { 10, TH_CHASE, AC_NONE,        S_OFCCHASE1S },
+    [S_OFCCHASE1S] = { 3,  TH_NONE,  AC_NONE,        S_OFCCHASE2 },
+    [S_OFCCHASE2]  = { 8,  TH_CHASE, AC_NONE,        S_OFCCHASE3 },
+    [S_OFCCHASE3]  = { 10, TH_CHASE, AC_NONE,        S_OFCCHASE3S },
+    [S_OFCCHASE3S] = { 3,  TH_NONE,  AC_NONE,        S_OFCCHASE4 },
+    [S_OFCCHASE4]  = { 8,  TH_CHASE, AC_NONE,        S_OFCCHASE1 },
+    [S_OFCSHOOT1]  = { 6,  TH_NONE,  AC_NONE,        S_OFCSHOOT2 },
+    [S_OFCSHOOT2]  = { 20, TH_NONE,  AC_SHOOT,       S_OFCSHOOT3 },
+    [S_OFCSHOOT3]  = { 10, TH_NONE,  AC_NONE,        S_OFCCHASE1 },
+    [S_OFCDIE1]    = { 11, TH_NONE,  AC_DEATHSCREAM, S_OFCDIE2 },
+    [S_OFCDIE2]    = { 11, TH_NONE,  AC_NONE,        S_OFCDIE3 },
+    [S_OFCDIE3]    = { 11, TH_NONE,  AC_NONE,        S_OFCDIE4 },
+    [S_OFCDIE4]    = { 11, TH_NONE,  AC_NONE,        S_OFCDIE5 },
+    [S_OFCDIE5]    = { 0,  TH_NONE,  AC_NONE,        S_OFCDIE5 },
+    [S_OFCPAIN]    = { 10, TH_NONE,  AC_NONE,        S_OFCCHASE1 },
+    [S_OFCPAIN1]   = { 10, TH_NONE,  AC_NONE,        S_OFCCHASE1 },
 };
 
 static void NewState(objtype *ob, int state) {
@@ -616,7 +634,10 @@ static void T_Chase(objtype *ob) {
         else chance = (tics << 4) / dist;
 
         if (US_RndT() < chance) {
-            NewState(ob, ob->obclass == ssobj ? S_SSSHOOT1 : S_GRDSHOOT1);
+            int shoot = S_GRDSHOOT1;
+            if (ob->obclass == ssobj)           shoot = S_SSSHOOT1;
+            else if (ob->obclass == officerobj) shoot = S_OFCSHOOT1;
+            NewState(ob, shoot);
             return;
         }
         dodge = 1;
@@ -664,9 +685,10 @@ int CheckSight(objtype *ob) {
  * multiplier (guard 3x, SS 4x, dog 2x), and set the attack flags. */
 void FirstSighting(objtype *ob) {
     switch (ob->obclass) {
-    case ssobj:  NewState(ob, S_SSCHASE1);  ob->speed *= 4; break;
-    case dogobj: NewState(ob, S_DOGCHASE1); ob->speed *= 2; break;
-    default:     NewState(ob, S_GRDCHASE1); ob->speed *= 3; break; /* guard */
+    case ssobj:      NewState(ob, S_SSCHASE1);  ob->speed *= 4; break;
+    case dogobj:     NewState(ob, S_DOGCHASE1); ob->speed *= 2; break;
+    case officerobj: NewState(ob, S_OFCCHASE1); ob->speed *= 5; break;
+    default:         NewState(ob, S_GRDCHASE1); ob->speed *= 3; break; /* guard */
     }
     if (ob->distance < 0) ob->distance = 0;
     ob->flags |= FL_ATTACKMODE | FL_FIRSTATTACK;
@@ -689,9 +711,10 @@ int SightPlayer(objtype *ob) {
             return 0;
         }
         switch (ob->obclass) {           /* class-specific reaction delay */
-        case ssobj:  ob->temp2 = 1 + US_RndT() / 6; break;
-        case dogobj: ob->temp2 = 1 + US_RndT() / 8; break;
-        default:     ob->temp2 = 1 + US_RndT() / 4; break; /* guard */
+        case officerobj: ob->temp2 = 2;                 break; /* constant, no RNG */
+        case ssobj:      ob->temp2 = 1 + US_RndT() / 6; break;
+        case dogobj:     ob->temp2 = 1 + US_RndT() / 8; break;
+        default:         ob->temp2 = 1 + US_RndT() / 4; break; /* guard */
         }
         return 0;
     }
@@ -739,8 +762,9 @@ static void T_Shoot(objtype *ob) {
 /* WL_STATE.C KillActor (guard: die animation, no longer shootable; points/item dropped). */
 static void KillActor(objtype *ob) {
     int die = S_GRDDIE1;
-    if (ob->obclass == ssobj)       die = S_SSDIE1;
-    else if (ob->obclass == dogobj) die = S_DOGDIE1;
+    if (ob->obclass == ssobj)           die = S_SSDIE1;
+    else if (ob->obclass == dogobj)     die = S_DOGDIE1;
+    else if (ob->obclass == officerobj) die = S_OFCDIE1;
     ob->tilex = ob->x >> TILESHIFT;
     ob->tiley = ob->y >> TILESHIFT;
     NewState(ob, die);
@@ -760,6 +784,8 @@ static void DamageActor(objtype *ob, int damage) {
         return;                          /* dogs have no pain state (1 HP) */
     if (ob->obclass == ssobj)
         NewState(ob, (ob->hitpoints & 1) ? S_SSPAIN : S_SSPAIN1);
+    else if (ob->obclass == officerobj)
+        NewState(ob, (ob->hitpoints & 1) ? S_OFCPAIN : S_OFCPAIN1);
     else
         NewState(ob, (ob->hitpoints & 1) ? S_GRDPAIN : S_GRDPAIN1);
 }
@@ -940,6 +966,10 @@ void SpawnEnemy(int which, int tilex, int tiley, int dir) {
         ob->obclass = dogobj;
         ob->hitpoints = HP_DOG;
         ob->speed = SPDDOG;
+    } else if (which == en_officer) {
+        ob->state = S_OFCSTAND;
+        ob->obclass = officerobj;
+        ob->hitpoints = HP_OFFICER;
     } else {
         ob->state = S_GRDSTAND;
         ob->obclass = guardobj;

@@ -98,15 +98,24 @@ contract Engine {
     uint256 internal constant S_DOGCHASE1 = 39;
     uint256 internal constant S_DOGJUMP1 = 45;
     uint256 internal constant S_DOGDIE1 = 50;
+    uint256 internal constant S_OFCSTAND = 54;
+    uint256 internal constant S_OFCCHASE1 = 55;
+    uint256 internal constant S_OFCSHOOT1 = 61;
+    uint256 internal constant S_OFCDIE1 = 64;
+    uint256 internal constant S_OFCPAIN = 69;
+    uint256 internal constant S_OFCPAIN1 = 70;
 
-    // classtype: guardobj=3, ssobj=5, dogobj=6 (obclass = guardobj + enemy_t)
+    // classtype: guardobj=3, officerobj=4, ssobj=5, dogobj=6 (obclass = guardobj + enemy_t)
     uint8 internal constant GUARDOBJ = 3;
+    uint8 internal constant OFFICEROBJ = 4;
     uint8 internal constant SSOBJ = 5;
     uint8 internal constant DOGOBJ = 6;
-    uint256 internal constant EN_SS = 2; // enemy_t spawn index for the SS
+    uint256 internal constant EN_OFFICER = 1;
+    uint256 internal constant EN_SS = 2;
     uint256 internal constant EN_DOG = 3;
     int256 internal constant HP_SS = 100;
     int256 internal constant HP_DOG = 1;
+    int256 internal constant HP_OFFICER = 50;
     int256 internal constant SPDDOG = 1500;
 
     // direction tables (WL_STATE.C). OPPOSITE[9]; DIAGONAL[9][9] row-major.
@@ -334,6 +343,10 @@ contract Engine {
             a.obclass = DOGOBJ;
             a.hitpoints = HP_DOG;
             a.speed = SPDDOG;
+        } else if (which == EN_OFFICER) {
+            a.state = S_OFCSTAND;
+            a.obclass = OFFICEROBJ;
+            a.hitpoints = HP_OFFICER;
         } else {
             a.state = S_GRDSTAND; // tictime 0 -> ticcount 0, think runs each tic
             a.obclass = GUARDOBJ;
@@ -969,7 +982,10 @@ contract Engine {
             if (dist == 0 || (dist == 1 && a.distance < 0x4000)) chance = 300;
             else chance = (TICS << 4) / dist;
             if (int256(_rnd(wd)) < chance) {
-                _newState(a, a.obclass == SSOBJ ? S_SSSHOOT1 : S_GRDSHOOT1);
+                uint256 shoot = S_GRDSHOOT1;
+                if (a.obclass == SSOBJ) shoot = S_SSSHOOT1;
+                else if (a.obclass == OFFICEROBJ) shoot = S_OFCSHOOT1;
+                _newState(a, shoot);
                 return;
             }
             dodge = true;
@@ -1085,6 +1101,7 @@ contract Engine {
         }
         if (a.obclass == DOGOBJ) return; // dogs have no pain state (1 HP)
         if (a.obclass == SSOBJ) _newState(a, (a.hitpoints & 1) == 1 ? S_SSPAIN : S_SSPAIN1);
+        else if (a.obclass == OFFICEROBJ) _newState(a, (a.hitpoints & 1) == 1 ? S_OFCPAIN : S_OFCPAIN1);
         else _newState(a, (a.hitpoints & 1) == 1 ? S_GRDPAIN : S_GRDPAIN1);
     }
 
@@ -1093,6 +1110,7 @@ contract Engine {
         uint256 die = S_GRDDIE1;
         if (a.obclass == SSOBJ) die = S_SSDIE1;
         else if (a.obclass == DOGOBJ) die = S_DOGDIE1;
+        else if (a.obclass == OFFICEROBJ) die = S_OFCDIE1;
         a.tilex = uint256(a.x >> 16);
         a.tiley = uint256(a.y >> 16);
         _newState(a, die);
@@ -1153,6 +1171,9 @@ contract Engine {
         } else if (a.obclass == DOGOBJ) {
             _newState(a, S_DOGCHASE1);
             a.speed *= 2;
+        } else if (a.obclass == OFFICEROBJ) {
+            _newState(a, S_OFCCHASE1);
+            a.speed *= 5;
         } else {
             _newState(a, S_GRDCHASE1);
             a.speed *= 3;
@@ -1175,10 +1196,15 @@ contract Engine {
             } else if (!wd.madenoise && !_checkSight(wd, a)) {
                 return;
             }
-            int256 r = int256(_rnd(wd)); // class-specific reaction delay (one RNG draw)
-            if (a.obclass == SSOBJ) a.temp2 = 1 + r / 6;
-            else if (a.obclass == DOGOBJ) a.temp2 = 1 + r / 8;
-            else a.temp2 = 1 + r / 4;
+            // class-specific reaction delay (the officer is a constant — NO RNG draw)
+            if (a.obclass == OFFICEROBJ) {
+                a.temp2 = 2;
+            } else {
+                int256 r = int256(_rnd(wd));
+                if (a.obclass == SSOBJ) a.temp2 = 1 + r / 6;
+                else if (a.obclass == DOGOBJ) a.temp2 = 1 + r / 8;
+                else a.temp2 = 1 + r / 4;
+            }
             return;
         }
         _firstSighting(a);
@@ -1296,7 +1322,25 @@ contract Engine {
         if (s == 50) return (15, 0, 2, 51); // dogdie1 (AC_DEATHSCREAM)
         if (s == 51) return (15, 0, 0, 52); // dogdie2
         if (s == 52) return (15, 0, 0, 53); // dogdie3
-        return (0, 0, 0, 53); // dogdead (s==53)
+        if (s == 53) return (0, 0, 0, 53); // dogdead
+        // --- officer (states 54..70): guard-like, faster shot, 5 die frames ---
+        if (s == 54) return (0, TH_STAND, 0, 54); // ofcstand
+        if (s == 55) return (10, TH_CHASE, 0, 56); // ofcchase1
+        if (s == 56) return (3, 0, 0, 57); // ofcchase1s
+        if (s == 57) return (8, TH_CHASE, 0, 58); // ofcchase2
+        if (s == 58) return (10, TH_CHASE, 0, 59); // ofcchase3
+        if (s == 59) return (3, 0, 0, 60); // ofcchase3s
+        if (s == 60) return (8, TH_CHASE, 0, 55); // ofcchase4
+        if (s == 61) return (6, 0, 0, 62); // ofcshoot1
+        if (s == 62) return (20, 0, 1, 63); // ofcshoot2 (AC_SHOOT)
+        if (s == 63) return (10, 0, 0, 55); // ofcshoot3 -> ofcchase1
+        if (s == 64) return (11, 0, 2, 65); // ofcdie1 (AC_DEATHSCREAM)
+        if (s == 65) return (11, 0, 0, 66); // ofcdie2
+        if (s == 66) return (11, 0, 0, 67); // ofcdie3
+        if (s == 67) return (11, 0, 0, 68); // ofcdie4
+        if (s == 68) return (0, 0, 0, 68); // ofcdie5 (corpse)
+        if (s == 69) return (10, 0, 0, 55); // ofcpain  -> ofcchase1
+        return (10, 0, 0, 55); // ofcpain1 (s==70) -> ofcchase1
     }
 
     // ---------------- helpers ----------------

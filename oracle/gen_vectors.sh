@@ -52,5 +52,9 @@ run door_use door_room.txt 4 8 1
 "$ORACLE" oracle/maps/test_room.txt vectors/dog_bite.input.txt 4 8 1 12 8 2 3 \
     > vectors/dog_bite.golden.jsonl
 
+# kill_officer: an officer (50 HP, speed x5, constant reaction) chases, fires, and dies.
+"$ORACLE" oracle/maps/test_room.txt vectors/kill_officer.input.txt 4 8 1 12 8 2 1 \
+    > vectors/kill_officer.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl
