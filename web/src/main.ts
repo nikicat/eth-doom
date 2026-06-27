@@ -141,6 +141,41 @@ async function deploy(art: any, args: any[]): Promise<Address> {
   return r.contractAddress!;
 }
 
+// --- client-side prediction (M4) -------------------------------------------------
+// `oracle/build_wasm.sh` compiles the SAME carved C as sim_oracle to wasm. We drive
+// it through the SAME spawn the Map/Engine got, then predict each tick locally for
+// instant feedback while the burner submits to the chain in the background. Because
+// that C is differential-proven equal to the Engine, the predictor's packed state is
+// byte-identical to Session.getState() — reconciliation is a plain hex compare.
+// Falls back to chain-only if /predict.wasm isn't built.
+type Predictor = { step: (cx: number, cy: number, b: number) => void; read: () => Hex };
+
+async function loadPredictor(): Promise<Predictor | null> {
+  try {
+    const r = await fetch("/predict.wasm");
+    if (!r.ok) return null;
+    const { instance } = await WebAssembly.instantiate(await r.arrayBuffer());
+    const E = instance.exports as any;
+    const mem = E.memory as WebAssembly.Memory;
+    // setup: same order as the Map blobs → same doornum / item index / actor order
+    E.reset();
+    for (let i = 0; i < W * H; i++) {
+      const v = tiles[i] & 0xff;
+      if (v && !(v & 0x80)) E.set_wall(i % W, (i / W) | 0); // wall (door tiles via add_door)
+    }
+    for (const [x, y, pk] of doorList) E.add_door(x, y, (pk ?? 0) & 1, (pk ?? 0) >> 1);
+    for (const [x, y, n] of itemList) E.add_item(x, y, n);
+    E.init_actors();
+    E.add_player(spawnTile.x, spawnTile.y, spawnTile.dir);
+    for (const [x, y, dir, cls] of guardTiles) E.add_enemy(cls ?? 0, x, y, dir ?? 0);
+    const read = (): Hex => bytesToHex(new Uint8Array(mem.buffer, E.state_ptr(), E.read_state()));
+    return { step: (cx, cy, b) => E.step(cx, cy, b), read };
+  } catch (e) {
+    console.warn("predictor unavailable:", e);
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // packed-state decoder  (must match Engine.sol _pack layout)
 // ---------------------------------------------------------------------------
@@ -933,6 +968,7 @@ function renderMap(s: State) {
 
 // short "owner → burner" label for the HUD; set once the session key is delegated
 let sessionKeyLabel = "—";
+let predictLabel = "off (chain-only)"; // client-side prediction status
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 function renderDbg(s: State, tick: number, gas: number | null) {
@@ -942,6 +978,7 @@ function renderDbg(s: State, tick: number, gas: number | null) {
     `tick      ${tick}\n` +
     `gas/tick  ${gas != null ? `${(gas / 1000).toFixed(0)}k (${gas.toLocaleString("en-US")})` : "—"}\n` +
     `signer    ${sessionKeyLabel}\n` +
+    `predict   ${predictLabel}\n` +
     `art       ${assets ? "real id (VSWAP)" : "procedural"}\n` +
     `guards    ${s.guards.length}\n` +
     `rndindex  ${s.rndindex}\n\n` +
@@ -1041,9 +1078,27 @@ async function main() {
   sessionKeyLabel = `${shortAddr(account.address)} → ${shortAddr(burner.address)} (key)`;
   console.log(`[session key] owner ${account.address} delegated burner ${burner.address} until ${expiry}`);
 
-  latest = decode(
-    (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex,
-  );
+  const getStateHex = async (): Promise<Hex> =>
+    (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex;
+
+  const initHex = await getStateHex();
+  latest = decode(initHex);
+
+  // load the wasm predictor and verify its spawn is byte-identical to the chain's
+  const predictor = await loadPredictor();
+  let predictEnabled = false;
+  if (predictor) {
+    const predHex = predictor.read();
+    predictEnabled = predHex.toLowerCase() === initHex.toLowerCase();
+    predictLabel = predictEnabled ? "wasm ✓ verified vs chain spawn" : "off (spawn mismatch)";
+    console.log(
+      predictEnabled
+        ? "[predict] wasm predictor verified against chain spawn — predicting locally"
+        : "[predict] spawn mismatch, disabling prediction",
+      predictEnabled ? "" : { predHex, initHex },
+    );
+  }
+  let predOk = 0, predTotal = 0, confTick = 0;
 
   // render loop — smooth fx (gun/muzzle/flash) regardless of tx cadence
   function frame() {
@@ -1059,27 +1114,62 @@ async function main() {
   }
   requestAnimationFrame(frame);
 
-  // tx loop — one submitInput per step; world only advances when we act. Signed by
-  // the BURNER (session key), so no wallet popup per tick. (On a low-latency chain
-  // we'd track the nonce locally and not await each receipt; anvil mines instantly.)
-  for (;;) {
-    const before = latest!;
-    const hash = await burnerWallet.writeContract({
-      address: session,
-      abi: SessionA.abi,
-      functionName: "submitInput",
-      args: [cmd()],
-    });
-    const receipt = await pub.waitForTransactionReceipt({ hash });
-    lastGas = Number(receipt.gasUsed);
-    const after = decode(
-      (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex,
-    );
+  // a damage/muzzle flash when health/ammo drop between two states
+  const applyFx = (before: State, after: State) => {
     const now = performance.now();
     if (after.player.ammo < before.player.ammo) { fx.muzzleUntil = now + 90; fx.recoilUntil = now + 110; }
     if (after.player.health < before.player.health) fx.damageUntil = now + 380;
-    latest = after;
-    tick++;
+  };
+
+  // tx loop — one submitInput per step. Signed by the BURNER (session key), so no
+  // wallet popup per tick. With the predictor on, we render the locally-predicted
+  // state IMMEDIATELY (decoupled from tx latency) and reconcile against the chain by
+  // a byte compare once it confirms. (On a low-latency chain we'd skip awaiting each
+  // receipt and track the nonce locally; anvil mines instantly.)
+  for (;;) {
+    const before = latest!;
+    const c = cmd();
+
+    // 1. PREDICT locally — instant feedback, no round-trip
+    let predHex: Hex | null = null;
+    if (predictEnabled && predictor) {
+      predictor.step(Number(c.controlx), Number(c.controly), c.buttons);
+      predHex = predictor.read();
+      const pred = decode(predHex);
+      applyFx(before, pred);
+      latest = pred;
+      tick++; // predicted tick runs ahead of the confirmed one
+    }
+
+    // 2. SUBMIT to the chain (authoritative)
+    const hash = await burnerWallet.writeContract({
+      address: session, abi: SessionA.abi, functionName: "submitInput", args: [c],
+    });
+    const receipt = await pub.waitForTransactionReceipt({ hash });
+    lastGas = Number(receipt.gasUsed);
+    confTick++;
+
+    // 3. RECONCILE the prediction against the confirmed chain state
+    const chainHex = await getStateHex();
+    if (predHex) {
+      predTotal++;
+      if (chainHex.toLowerCase() === predHex.toLowerCase()) {
+        predOk++;
+      } else {
+        // never expected (predictor is the same sim) — trust the chain, stop predicting
+        console.warn(`[predict] reconcile mismatch @ tick ${confTick}; falling back to chain`);
+        predictEnabled = false;
+        latest = decode(chainHex);
+      }
+      predictLabel = predictEnabled
+        ? `wasm ✓ ${predOk}/${predTotal} match · pred ${tick} / conf ${confTick}`
+        : `off (diverged @ ${confTick})`;
+    } else {
+      const after = decode(chainHex);
+      applyFx(before, after);
+      latest = after;
+      tick++;
+    }
     await new Promise((r) => setTimeout(r, 16));
   }
 }

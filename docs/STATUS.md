@@ -37,6 +37,10 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   and a minimap. WASD/arrows move, Shift strafes, Space fires. No game logic client-side. The
   client **owns the session and delegates an ephemeral burner key once**, then auto-signs every
   `submitInput` with it — popup-free play, no wallet prompt per tick (the HUD shows `owner → key`).
+  It also runs **client-side prediction**: the same carved C sim compiled to WebAssembly
+  (`oracle/build_wasm.sh`) advances each tick locally for instant feedback, while the burner submits
+  to the chain in the background; the predicted state is reconciled byte-for-byte against
+  `Session.getState()` (the HUD shows the live match count) — a continuous in-browser differential.
 - **Authentic id art + the real first level, runtime-loaded** — `scripts/fetch-shareware.sh` downloads
   the freely-distributable Wolf3D shareware and the Rust extractors decode it: `wl-extract` does
   **VSWAP** → wall textures + guard sprites + the player pistol and **VGAGRAPH** (Huffman + VGA-planar)
@@ -58,7 +62,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
 | **M3** world completeness | ✅ | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (4-shot burst, 100 HP) ✅; **dog** (melee, 1 HP) ✅; **officer** (speed ×5, 50 HP) ✅ — full E1 roster; **`SessionFactory`** (many games, one engine/map) ✅ |
-| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; **web burner/auto-sign UX** — the client owns the session, delegates an ephemeral burner once, and auto-signs every tick with it (no popup per input) ✅; next: MegaETH deploy (needs RPC + funded key), WASM Wolf3D-port renderer + client prediction |
+| **M4** MegaETH + UX | 🟡 | **session-key delegation** in `Session` (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`) ✅; **`Deploy.s.sol`** — one-command deploy of Engine + SessionFactory + Map + owned Session, default test room or a real level via `MAP_JSON` ✅; **web burner/auto-sign UX** — the client owns the session, delegates an ephemeral burner once, and auto-signs every tick with it (no popup per input) ✅; **client-side prediction** — the carved C sim compiled to wasm (clang `--target=wasm32`, no Emscripten) predicts each tick locally for instant feedback, reconciled byte-for-byte against the chain (live 936/936 match on E1L1) ✅; next: MegaETH deploy (needs RPC + funded key), optional full Wolf4SDL-port WASM renderer |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
 
@@ -103,12 +107,20 @@ inputs through `Session.submitInput`, and asserts the decoded state matches the 
 position/action/ticcount, every item's taken bit, obclass, and the RNG index — over single-guard,
 multi-guard, SS, dog, and officer scenarios). All ten scenarios pass.
 
+The **wasm predictor is held to the same bar**: `oracle/verify_wasm.mjs` replays every golden
+scenario through `web/public/predict.wasm` and asserts its decoded packed state matches the golden
+vectors tic-by-tic (all ten pass, 1580 tics). So the same carved C is differential-verified compiled
+two ways — natively (`sim_oracle`, the ground truth) and to wasm (the browser predictor) — and the
+client additionally reconciles each predicted tick against `Session.getState()` live.
+
 ## Run it
 
 ```
 ( cd contracts && forge build )           # build artifacts (harness + web import these)
 ( cd oracle && ./gen_vectors.sh )         # regenerate golden vectors from the C oracle
 ( cd rust && cargo run -p harness )        # differential + gas, all scenarios
+bash oracle/build_wasm.sh                  # build the wasm predictor -> web/public/predict.wasm
+node oracle/verify_wasm.mjs                # differential: wasm predictor == golden vectors
 # live view:
 anvil --silent &
 ( cd web && pnpm install && pnpm dev )      # http://localhost:5173

@@ -138,6 +138,7 @@ are deviations from id's *render-coupled* code, not between our two implementati
 |---|---|---|
 | contracts (`Engine`/`Map`/`Session`) | Solidity | Foundry (`via_ir`) |
 | sim oracle (ground truth) | C | cc/make |
+| client-side predictor | C → WebAssembly | clang `--target=wasm32` (freestanding, no Emscripten) + binaryen `wasm-opt`; the SAME carved C as the oracle, trig baked from `--dump-trig` |
 | differential + gas harness | Rust | alloy + in-process anvil |
 | client (first-person view + HUD) | TypeScript | Vite + viem; DDA raycaster adapted from 3DSage (MIT) |
 | asset extractor (VSWAP textures/sprites + VGAGRAPH HUD pics) | Rust | `png`; reads user-provided shareware, nothing committed |
