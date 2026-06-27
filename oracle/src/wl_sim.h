@@ -33,6 +33,15 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 enum { dr_open, dr_closed, dr_opening, dr_closing };   /* doorobj_t.action */
 enum { dr_normal, dr_lock1, dr_lock2, dr_lock3, dr_lock4, dr_elevator }; /* lock */
 
+/* --- pickups (WL_ACT1.C statics + WL_AGENT.C GetBonus) --- */
+#define MAXSTATS 400
+/* WL_DEF.H stat_t bonus item numbers (non-bonus dressing/block omitted). */
+enum {
+    bo_gibs = 3, bo_alpo, bo_firstaid, bo_key1, bo_key2, bo_key3, bo_key4,
+    bo_cross, bo_chalice, bo_bible, bo_crown, bo_clip, bo_clip2,
+    bo_machinegun, bo_chaingun, bo_food, bo_fullheal, bo_25clip, bo_spear
+};
+
 /* --- WL_AGENT.C movement scales --- */
 #define MOVESCALE      150L
 #define BACKMOVESCALE  100L
@@ -154,6 +163,22 @@ void CloseDoor(int door);
 void OperateDoor(int door);
 void MoveDoors(void);
 void Cmd_Use(int buttons);
+
+/* --- pickups (wl_actor.c) — bonus statics; FL_BONUS only (dressing/blocking
+ * decorations dropped). Pickup is render-coupled in id (WL_DRAW.C TransformTile);
+ * the faithful headless equivalent is "player tile == item tile", applied
+ * identically on both sides. --- */
+typedef struct {
+    unsigned char tilex, tiley, itemnumber, taken;
+} statobj_t;
+extern statobj_t statobjlist[MAXSTATS];
+extern int  numstats;
+extern int  keys;   /* gamestate.keys bitmask (bo_key1..4 -> bits 0..3) */
+extern long score;  /* gamestate.score */
+
+void InitStaticList(void);
+void SpawnStatic(int tilex, int tiley, int itemnumber);
+void GetBonuses(void);   /* per-tic: pick up any bonus on the player's tile */
 
 /* --- enemy actors (wl_actor.c) --- */
 #define MAXENEMIES 64

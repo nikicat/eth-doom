@@ -34,5 +34,10 @@ run door_use door_room.txt 4 8 1
 "$ORACLE" oracle/maps/door_room.txt vectors/door_guard.input.txt 4 8 1 12 8 2 \
     > vectors/door_guard.golden.jsonl
 
+# item_pickup: player walks east over a clip / first-aid / key / treasure while a guard
+# shoots — exercises GetBonus (ammo+keys+score, heal after damage, skip-if-full).
+"$ORACLE" oracle/maps/item_room.txt vectors/item_pickup.input.txt 2 8 1 13 8 2 \
+    > vectors/item_pickup.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl

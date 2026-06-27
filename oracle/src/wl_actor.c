@@ -28,6 +28,12 @@ int       doornum;
 unsigned  doorposition[MAXDOORS];
 int       useheld;                        /* buttonheld[bt_use] edge latch */
 
+/* WL_ACT1.C bonus statics + WL_AGENT.C gamestate bits the pickups touch. */
+statobj_t statobjlist[MAXSTATS];
+int       numstats;
+int       keys;
+long      score;
+
 /* WL_STATE.C global direction tables */
 static const dirtype opposite[9] =
     { west, southwest, south, southeast, east, northeast, north, northwest, nodir };
@@ -332,8 +338,10 @@ void CloseDoor(int door) {
 
 void OperateDoor(int door) {
     int lock = doorobjlist[door].lock;
-    if (lock >= dr_lock1 && lock <= dr_lock4)
-        return;                                 /* gamestate.keys==0 (no pickups) */
+    if (lock >= dr_lock1 && lock <= dr_lock4) {
+        if (!(keys & (1 << (lock - dr_lock1))))
+            return;                             /* locked: need the matching key */
+    }
     switch (doorobjlist[door].action) {
     case dr_closed:
     case dr_closing:
@@ -415,6 +423,62 @@ void Cmd_Use(int buttons) {
         useheld = 1;
         OperateDoor(doortile & ~0x80);
     }
+}
+
+/* =========================================================================
+ * PICKUPS (WL_AGENT.C GetBonus). Effects are faithful; sounds, treasurecount,
+ * lives (GiveExtraMan) and weapon switching are dropped (one weapon, modeled as
+ * a fire cooldown — weapon pickups still grant their GiveAmmo(6)). The render-
+ * coupled trigger (WL_DRAW.C TransformTile) becomes "player on the item tile",
+ * applied identically in the oracle and Solidity.
+ * ========================================================================= */
+
+static void HealSelf(int points) { health += points; if (health > 100) health = 100; }
+static void GiveAmmo(int n)      { ammo += n; if (ammo > 99) ammo = 99; }
+static void GivePoints(long pts) { score += pts; }   /* extra-life thresholds dropped */
+
+/* Apply one bonus to the player; return 1 if it was consumed (remove it). */
+static int GetBonus(statobj_t *check) {
+    switch (check->itemnumber) {
+    case bo_firstaid:   if (health == 100) return 0; HealSelf(25); break;
+    case bo_key1: case bo_key2: case bo_key3: case bo_key4:
+        keys |= 1 << (check->itemnumber - bo_key1); break;
+    case bo_cross:      GivePoints(100);  break;
+    case bo_chalice:    GivePoints(500);  break;
+    case bo_bible:      GivePoints(1000); break;
+    case bo_crown:      GivePoints(5000); break;
+    case bo_clip:       if (ammo == 99) return 0; GiveAmmo(8);  break;
+    case bo_clip2:      if (ammo == 99) return 0; GiveAmmo(4);  break;
+    case bo_25clip:     if (ammo == 99) return 0; GiveAmmo(25); break;
+    case bo_machinegun:
+    case bo_chaingun:   GiveAmmo(6); break;   /* GiveWeapon -> GiveAmmo(6); switch dropped */
+    case bo_fullheal:   HealSelf(99); GiveAmmo(25); break;
+    case bo_food:       if (health == 100) return 0; HealSelf(10); break;
+    case bo_alpo:       if (health == 100) return 0; HealSelf(4);  break;
+    case bo_gibs:       if (health > 10)   return 0; HealSelf(1);  break;
+    default:            return 0;             /* bo_spear / unknown: ignore */
+    }
+    return 1;
+}
+
+void GetBonuses(void) {
+    int i;
+    for (i = 0; i < numstats; i++) {
+        statobj_t *s = &statobjlist[i];
+        if (s->taken) continue;
+        if (player->tilex == s->tilex && player->tiley == s->tiley)
+            if (GetBonus(s)) s->taken = 1;
+    }
+}
+
+void InitStaticList(void) { numstats = 0; keys = 0; score = 0; }
+
+void SpawnStatic(int tilex, int tiley, int itemnumber) {
+    statobj_t *s = &statobjlist[numstats++];
+    s->tilex = tilex;
+    s->tiley = tiley;
+    s->itemnumber = itemnumber;
+    s->taken = 0;
 }
 
 /* WL_STATE.C CheckLine — straight-line LOS over the tilemap; a door tile blocks

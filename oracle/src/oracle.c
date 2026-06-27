@@ -36,6 +36,13 @@ static void emit(long tick)
                    doorposition[i], doorobjlist[i].action, doorobjlist[i].ticcount);
         printf("]");
     }
+    if (numstats > 0) {
+        printf(",\"items\":[");
+        for (int i = 0; i < numstats; i++)
+            printf("%s%d", i ? "," : "", statobjlist[i].taken);
+        printf("]");
+    }
+    printf(",\"keys\":%d,\"score\":%ld", keys, score);
     printf("}\n");
 }
 
@@ -50,6 +57,7 @@ static void load_map(const char *path)
         fprintf(stderr, "bad map header\n"); exit(1);
     }
     InitDoorList();
+    InitStaticList();
     for (y = 0; y < h; y++) {
         if (!fgets(line, sizeof line, f)) { fprintf(stderr, "map too short\n"); exit(1); }
         for (x = 0; x < w; x++) {
@@ -57,6 +65,10 @@ static void load_map(const char *path)
             if (c == '#')      tilemap[x][y] = 1;              /* wall */
             else if (c == 'D') SpawnDoor(x, y, 1, dr_normal);  /* vertical door */
             else if (c == 'd') SpawnDoor(x, y, 0, dr_normal);  /* horizontal door */
+            else if (c == 'a') SpawnStatic(x, y, bo_clip);     /* ammo clip */
+            else if (c == 'h') SpawnStatic(x, y, bo_firstaid); /* first-aid */
+            else if (c == 'k') SpawnStatic(x, y, bo_key1);     /* gold key */
+            else if (c == 't') SpawnStatic(x, y, bo_cross);    /* treasure */
             else               tilemap[x][y] = 0;              /* floor */
         }
     }
@@ -128,6 +140,7 @@ int main(int argc, char **argv)
         PlayerAttack(btns);
         for (int e = 0; e < numenemies; e++)
             DoActor(&enemies[e]);
+        GetBonuses();   /* WL_DRAW.C ThreeDRefresh: pick up bonuses on the player tile */
         emit(++tick);
     }
     fclose(f);

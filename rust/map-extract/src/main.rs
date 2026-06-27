@@ -117,6 +117,27 @@ const fn is_guard(t: u16) -> bool {
     matches!(t, 108..=115 | 144..=151 | 180..=187)
 }
 
+/// WL1 statinfo[] type per index (WL_ACT1.C): 0 = non-bonus (dressing/block);
+/// else the stat_t bonus number. Plane-1 info code `t` indexes statinfo at t-23
+/// (WL_GAME.C ScanInfoPlane: `case 23..` -> SpawnStatic(x,y,tile-23)).
+const STATINFO_BO: [u8; 49] = [
+    0, 0, 0, 0, 0, 0, 4, 0, // 0..7   (idx6 bo_alpo)
+    0, 0, 0, 0, 0, 0, 0, 0, // 8..15
+    0, 0, 0, 0, 6, 7, 0, 0, // 16..23 (idx20 bo_key1, idx21 bo_key2)
+    18, 5, 14, 16, 17, 10, 11, 12, // 24..31 (food,firstaid,clip,mg,cg,cross,chalice,bible)
+    13, 19, 3, 0, 0, 0, 3, 0, // 32..39 (crown,fullheal,gibs,…,gibs)
+    0, 0, 0, 0, 0, 0, 0, 0, // 40..47
+    15, // 48 bo_clip2
+];
+
+fn bonus_item(t: u16) -> Option<u8> {
+    if t < 23 {
+        return None;
+    }
+    let idx = (t - 23) as usize;
+    STATINFO_BO.get(idx).copied().filter(|&bo| bo != 0)
+}
+
 const AREATILE: u16 = 107;
 const AMBUSHTILE: u16 = 106;
 
@@ -176,9 +197,10 @@ fn main() -> Result<()> {
     let plane0 = decode_plane(&maps, planestart[0], planelen[0], w * h, rlewtag)?; // tilemap
     let plane1 = decode_plane(&maps, planestart[1], planelen[1], w * h, rlewtag)?; // spawns
 
-    // scan plane 1 for the player start + guards; plane 0 holds wall textures
+    // scan plane 1 for the player start + guards + bonus items; plane 0 holds geometry
     let mut spawn = None;
     let mut guards = Vec::new();
+    let mut items: Vec<[u8; 3]> = Vec::new();
     for y in 0..h {
         for x in 0..w {
             let t = plane1[y * w + x];
@@ -186,6 +208,8 @@ fn main() -> Result<()> {
                 spawn = Some((x, y, (t - 19) as u8)); // dir: N=0 E=1 S=2 W=3
             } else if is_guard(t) {
                 guards.push([x, y, (t & 3) as usize]); // facing 0..3 (each 4-code group)
+            } else if let Some(bo) = bonus_item(t) {
+                items.push([x as u8, y as u8, bo]); // tilex, tiley, itemnumber
             }
         }
     }
@@ -222,15 +246,17 @@ fn main() -> Result<()> {
         "tiles": tiles,             // runtime tilemap: 1..=89 wall (texture (v-1)*2), 0x80|n door, 0 floor
         "guards": guards,           // [tilex, tiley, dir] per guard
         "doors": doors,             // [tilex, tiley, vertical|lock<<1] per door, in doornum order
+        "items": items,             // [tilex, tiley, itemnumber] per bonus item
     });
     if let Some(dir) = args.out.parent() {
         fs::create_dir_all(dir)?;
     }
     fs::write(&args.out, serde_json::to_vec_pretty(&level)?)?;
     println!(
-        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors -> {}",
+        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors, {} items -> {}",
         guards.len(),
         doors.len(),
+        items.len(),
         args.out.display()
     );
     Ok(())

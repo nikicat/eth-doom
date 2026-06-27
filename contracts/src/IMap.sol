@@ -16,4 +16,6 @@ interface IMap {
     /// @notice Doors in scan order (= doornum), 3 bytes each: tilex, tiley,
     /// (vertical | lock<<1). The tilemap encodes door tiles as `doornum | 0x80`.
     function doors() external view returns (bytes memory);
+    /// @notice Bonus items, 3 bytes each: tilex, tiley, itemnumber (WL_DEF.H stat_t).
+    function items() external view returns (bytes memory);
 }

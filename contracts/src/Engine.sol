@@ -43,6 +43,24 @@ contract Engine {
     uint256 internal constant DR_LOCK1 = 1;
     uint256 internal constant DR_LOCK4 = 4;
 
+    // --- bonus item numbers (WL_DEF.H stat_t) ---
+    uint256 internal constant BO_GIBS = 3;
+    uint256 internal constant BO_ALPO = 4;
+    uint256 internal constant BO_FIRSTAID = 5;
+    uint256 internal constant BO_KEY1 = 6;
+    uint256 internal constant BO_KEY4 = 9;
+    uint256 internal constant BO_CROSS = 10;
+    uint256 internal constant BO_CHALICE = 11;
+    uint256 internal constant BO_BIBLE = 12;
+    uint256 internal constant BO_CROWN = 13;
+    uint256 internal constant BO_CLIP = 14;
+    uint256 internal constant BO_CLIP2 = 15;
+    uint256 internal constant BO_MACHINEGUN = 16;
+    uint256 internal constant BO_CHAINGUN = 17;
+    uint256 internal constant BO_FOOD = 18;
+    uint256 internal constant BO_FULLHEAL = 19;
+    uint256 internal constant BO_25CLIP = 20;
+
     // dirtype: east=0 ne=1 north=2 nw=3 west=4 sw=5 south=6 se=7 nodir=8
     int256 internal constant EAST = 0;
     int256 internal constant NORTH = 2;
@@ -87,6 +105,17 @@ contract Engine {
         int256 ammo;
         int256 attackcount;
         uint256 useheld; // buttonheld[bt_use] edge latch
+        uint256 keys; // gamestate.keys bitmask (bo_key1..4 -> bits 0..3)
+        int256 score; // gamestate.score
+    }
+
+    /// @dev WL_ACT1.C bonus static. tilex/tiley/itemnumber are static (from Map);
+    /// `taken` is the per-tick dynamic bit (packed as a bitmask).
+    struct Item {
+        uint256 tilex;
+        uint256 tiley;
+        uint256 itemnumber;
+        uint256 taken;
     }
 
     /// @dev WL_ACT1.C doorobj_t. tilex/tiley/vertical/lock are static (from Map);
@@ -129,6 +158,7 @@ contract Engine {
         Player p;
         Actor[] actors;
         Door[] doors;
+        Item[] items;
         uint256 rndindex;
         bytes tiles;
         uint256 w;
@@ -183,6 +213,7 @@ contract Engine {
         for (uint256 i = 0; i < wd.actors.length; i++) {
             _doActor(wd, wd.actors[i]);
         }
+        _getBonuses(wd); // WL_DRAW.C ThreeDRefresh: pick up bonuses on the player tile
         return _pack(wd);
     }
 
@@ -219,6 +250,19 @@ contract Engine {
             dr.action = DR_CLOSED;
             dr.position = 0;
             dr.ticcount = 0;
+        }
+
+        // bonus items: static fields from the Map (3 bytes each: tilex, tiley,
+        // itemnumber). `taken` defaults false; tick() overwrites from the state.
+        bytes memory it = IMap(map).items();
+        uint256 ni = it.length / 3;
+        wd.items = new Item[](ni);
+        for (uint256 i = 0; i < ni; i++) {
+            Item memory item = wd.items[i];
+            item.tilex = uint8(it[i * 3]);
+            item.tiley = uint8(it[i * 3 + 1]);
+            item.itemnumber = uint8(it[i * 3 + 2]);
+            item.taken = 0;
         }
     }
 
@@ -369,7 +413,9 @@ contract Engine {
 
     function _operateDoor(World memory wd, uint256 d) internal pure {
         uint256 lock = wd.doors[d].lock;
-        if (lock >= DR_LOCK1 && lock <= DR_LOCK4) return; // gamestate.keys==0 (no pickups)
+        if (lock >= DR_LOCK1 && lock <= DR_LOCK4) {
+            if ((wd.p.keys & (1 << (lock - DR_LOCK1))) == 0) return; // locked: need the key
+        }
         uint256 action = wd.doors[d].action;
         if (action == DR_CLOSED || action == DR_CLOSING) _openDoor(wd, d);
         else if (action == DR_OPEN || action == DR_OPENING) _closeDoor(wd, d);
@@ -438,6 +484,76 @@ contract Engine {
         if (doortile & 0x80 != 0) {
             wd.p.useheld = 1;
             _operateDoor(wd, doortile & 0x7f);
+        }
+    }
+
+    // ---------------- pickups (WL_AGENT.C GetBonus) ----------------
+    // Render-coupled in id (WL_DRAW.C TransformTile -> the item's tile is the
+    // player's); the headless equivalent is "player on the item tile". Effects
+    // faithful; sound/treasurecount/lives/weapon-switching dropped (weapon pickups
+    // still grant their GiveAmmo(6)).
+
+    function _healSelf(World memory wd, int256 points) internal pure {
+        wd.p.health += points;
+        if (wd.p.health > 100) wd.p.health = 100;
+    }
+
+    function _giveAmmo(World memory wd, int256 n) internal pure {
+        wd.p.ammo += n;
+        if (wd.p.ammo > 99) wd.p.ammo = 99;
+    }
+
+    /// Apply one bonus to the player; return true if it was consumed (remove it).
+    function _getBonus(World memory wd, uint256 n) internal pure returns (bool) {
+        if (n == BO_FIRSTAID) {
+            if (wd.p.health == 100) return false;
+            _healSelf(wd, 25);
+        } else if (n >= BO_KEY1 && n <= BO_KEY4) {
+            wd.p.keys |= (1 << (n - BO_KEY1));
+        } else if (n == BO_CROSS) {
+            wd.p.score += 100;
+        } else if (n == BO_CHALICE) {
+            wd.p.score += 500;
+        } else if (n == BO_BIBLE) {
+            wd.p.score += 1000;
+        } else if (n == BO_CROWN) {
+            wd.p.score += 5000;
+        } else if (n == BO_CLIP) {
+            if (wd.p.ammo == 99) return false;
+            _giveAmmo(wd, 8);
+        } else if (n == BO_CLIP2) {
+            if (wd.p.ammo == 99) return false;
+            _giveAmmo(wd, 4);
+        } else if (n == BO_25CLIP) {
+            if (wd.p.ammo == 99) return false;
+            _giveAmmo(wd, 25);
+        } else if (n == BO_MACHINEGUN || n == BO_CHAINGUN) {
+            _giveAmmo(wd, 6); // GiveWeapon -> GiveAmmo(6); weapon switch dropped
+        } else if (n == BO_FULLHEAL) {
+            _healSelf(wd, 99);
+            _giveAmmo(wd, 25);
+        } else if (n == BO_FOOD) {
+            if (wd.p.health == 100) return false;
+            _healSelf(wd, 10);
+        } else if (n == BO_ALPO) {
+            if (wd.p.health == 100) return false;
+            _healSelf(wd, 4);
+        } else if (n == BO_GIBS) {
+            if (wd.p.health > 10) return false;
+            _healSelf(wd, 1);
+        } else {
+            return false; // bo_spear / unknown
+        }
+        return true;
+    }
+
+    function _getBonuses(World memory wd) internal pure {
+        for (uint256 i = 0; i < wd.items.length; i++) {
+            Item memory s = wd.items[i];
+            if (s.taken != 0) continue;
+            if (wd.p.tilex == s.tilex && wd.p.tiley == s.tiley) {
+                if (_getBonus(wd, s.itemnumber)) s.taken = 1;
+            }
         }
     }
 
@@ -1027,21 +1143,26 @@ contract Engine {
         return v < 0 ? -v : v;
     }
 
-    // ------- state codec: header + 1 word/player + 1 word/door + 1 word/actor -------
-    // header: rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16
+    // ------- state codec: header + player + 1 word/door + item-taken bitmask + 1 word/actor -------
+    // header: rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16 | numitems:uint16@24
     // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
-    //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176
+    //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 |
+    //         useheld:bit@176 | keys:uint8@184 | score:uint32@192
     // door:   action:uint8@0 | ticcount:int16@16 | position:uint16@32
+    // items:  ceil(numitems/256) words, bit i = item i taken (static tilex/tiley/itemnumber from Map)
     // actor:  x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88 |
     //         ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 |
     //         obclass:uint8@168 | speed:int32@176 | active:uint8@208 | temp2:int16@216
-    // blob order: [header][player][door_0..][actor_0..]
+    // blob order: [header][player][door_0..][itemword_0..][actor_0..]
 
     function _pack(World memory wd) internal pure returns (bytes memory out) {
         uint256 nd = wd.doors.length;
+        uint256 ni = wd.items.length;
         uint256 na = wd.actors.length;
-        out = new bytes(32 * (2 + nd + na));
-        uint256 header = (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((nd & 0xff) << 16);
+        uint256 iw = ni == 0 ? 0 : (ni + 255) / 256;
+        out = new bytes(32 * (2 + nd + iw + na));
+        uint256 header =
+            (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((nd & 0xff) << 16) | ((ni & 0xffff) << 24);
         uint256 pw = _packPlayer(wd.p);
         assembly {
             mstore(add(out, 0x20), header)
@@ -1053,16 +1174,27 @@ contract Engine {
                 mstore(add(add(out, 0x60), mul(i, 0x20)), dw)
             }
         }
+        for (uint256 wIdx = 0; wIdx < iw; wIdx++) {
+            uint256 bits;
+            for (uint256 bb = 0; bb < 256; bb++) {
+                uint256 idx = wIdx * 256 + bb;
+                if (idx >= ni) break;
+                if (wd.items[idx].taken != 0) bits |= (uint256(1) << bb);
+            }
+            assembly {
+                mstore(add(add(out, 0x60), mul(add(nd, wIdx), 0x20)), bits)
+            }
+        }
         for (uint256 i = 0; i < na; i++) {
             uint256 aw = _packActor(wd.actors[i]);
             assembly {
-                mstore(add(add(out, 0x60), mul(add(nd, i), 0x20)), aw)
+                mstore(add(add(out, 0x60), mul(add(add(nd, iw), i), 0x20)), aw)
             }
         }
     }
 
-    /// Fills wd.p, wd.actors, wd.rndindex, and the dynamic door fields (action/
-    /// ticcount/position) onto wd.doors (whose static fields _load set from the Map).
+    /// Fills wd.p, wd.actors, wd.rndindex, the dynamic door fields, and item-taken
+    /// bits onto wd.doors/wd.items (whose static fields _load set from the Map).
     function _unpack(bytes calldata b, World memory wd) internal pure {
         uint256 header;
         uint256 pw;
@@ -1073,6 +1205,8 @@ contract Engine {
         wd.rndindex = header & 0xff;
         uint256 na = (header >> 8) & 0xff;
         uint256 nd = (header >> 16) & 0xff;
+        uint256 ni = (header >> 24) & 0xffff;
+        uint256 iw = ni == 0 ? 0 : (ni + 255) / 256;
         wd.p = _unpackPlayer(pw);
         for (uint256 i = 0; i < nd; i++) {
             uint256 dw;
@@ -1081,11 +1215,22 @@ contract Engine {
             }
             _unpackDoorInto(wd.doors[i], dw);
         }
+        for (uint256 wIdx = 0; wIdx < iw; wIdx++) {
+            uint256 bits;
+            assembly {
+                bits := calldataload(add(b.offset, add(0x40, mul(add(nd, wIdx), 0x20))))
+            }
+            for (uint256 bb = 0; bb < 256; bb++) {
+                uint256 idx = wIdx * 256 + bb;
+                if (idx >= ni) break;
+                wd.items[idx].taken = (bits >> bb) & 1;
+            }
+        }
         wd.actors = new Actor[](na);
         for (uint256 i = 0; i < na; i++) {
             uint256 aw;
             assembly {
-                aw := calldataload(add(b.offset, add(0x40, mul(add(nd, i), 0x20))))
+                aw := calldataload(add(b.offset, add(0x40, mul(add(add(nd, iw), i), 0x20))))
             }
             wd.actors[i] = _unpackActor(aw);
         }
@@ -1114,6 +1259,8 @@ contract Engine {
         w |= uint256(uint16(int16(p.ammo))) << 144;
         w |= uint256(uint16(int16(p.attackcount))) << 160;
         w |= (p.useheld & 1) << 176;
+        w |= (p.keys & 0xff) << 184;
+        w |= uint256(uint32(int32(p.score))) << 192;
     }
 
     function _unpackPlayer(uint256 w) internal pure returns (Player memory p) {
@@ -1127,6 +1274,8 @@ contract Engine {
         p.ammo = int256(int16(uint16(w >> 144)));
         p.attackcount = int256(int16(uint16(w >> 160)));
         p.useheld = (w >> 176) & 1;
+        p.keys = (w >> 184) & 0xff;
+        p.score = int256(int32(uint32(w >> 192)));
     }
 
     function _packActor(Actor memory a) internal pure returns (uint256 w) {

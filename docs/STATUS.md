@@ -22,6 +22,9 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   player opens the one they face with **Use** (`Cmd_Use`), a chasing guard opens a door in its path
   (`TryWalk` → `OpenDoor`) and waits for it (`T_Chase`), doors auto-close after `OPENTICS`, block
   movement until fully open, and gate line-of-sight while sliding (`CheckLine` reads `doorposition`).
+- **Pickups** — bonus items (`SpawnStatic`/`GetBonus`): walk onto a clip/first-aid/key/treasure to
+  take it — ammo/health with id's clamps + "skip if full" guards, treasure → score, keys → the keyring
+  (a **gold/silver key unlocks its locked door** in `OperateDoor`). Items vanish as they're consumed.
 - **A live first-person browser view** — a TypeScript/viem client that deploys to anvil, drives the
   sim one `submitInput` tx per step, and renders the decoded on-chain state: a raycaster wall view
   (DDA adapted from 3DSage's MIT raycaster), guards as depth-buffered sprite columns, a pistol
@@ -47,7 +50,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2a** RNG + actor model | ✅ | deterministic `rndtable`/`US_RndT`; `objtype`/`DoActor` state machine; multi-actor packed state |
 | **M2b** guard chase AI | ✅ | chase/dodge/move/LOS, oracle + Solidity, differential PASS |
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
-| **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** (`T_Stand`/`SightPlayer`/`CheckSight`) ✅; **doors** (`OperateDoor`/`MoveDoors`/`Cmd_Use`, player Use + guard-opens-door + LOS gating) ✅; pickups/other enemy types + `SessionFactory` ⬜ |
+| **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** (`OperateDoor`/`MoveDoors`/`Cmd_Use`, guard-opens-door + LOS gating) ✅; **pickups** (`GetBonus`: ammo/health/keys/treasure, keys unlock doors) ✅; other enemy types + actor-vs-actor collision + `SessionFactory` ⬜ |
 | **M4** MegaETH + UX | ⬜ | deploy to MegaETH; session-key delegation + auto-signing; WASM Wolf3D-port renderer; client prediction |
 
 ## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
@@ -57,23 +60,25 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | `move_basic` | movement only | 60.3k | 65.1k | 80.6k |
 | `chase_guard` | guard chases + shoots you (151 tics) | 66.9k | 72.3k | 92.3k |
 | `kill_guard` | you fire + kill the guard (81 tics) | 67.1k | 70.0k | 100.4k |
-| `door_use` | walk up to a door, Use it, pass through (151 tics) | 68.6k | 71.8k | 85.7k |
-| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 71.4k | 77.4k | 101.8k |
+| `door_use` | walk up to a door, Use it, pass through (151 tics) | 73.3k | 76.6k | 90.4k |
+| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 76.2k | 82.2k | 106.6k |
+| `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 89.1k | 96.4k | 123.6k |
 
-`submitInput` gas is the true per-input cost a player pays — ~60–110k with a live guard + door on the
-16×16 test map, a fraction of a cent on a cheap L2. The map is stored **SSTORE2-style** (the tilemap
-is a data contract's bytecode, read each tick with one `EXTCODECOPY`) rather than as a `bytes` in
-storage; on the real 64×64 level this removes ~128 cold `SLOAD`s/tick (~270k gas). A full 12-guard +
-22-door E1L1 tick is ~282k (each live door adds ~2.8k/tick: a packed door word + `MoveDoors`); doors
-scale ~linearly, and the per-tick `Map.doors()` storage read is a remaining SSTORE2 candidate.
+`submitInput` gas is the true per-input cost a player pays — ~65–125k with a live guard + door + items
+on the 16×16 test map, a fraction of a cent on a cheap L2. The tilemap is stored **SSTORE2-style** (a
+data contract's bytecode, read each tick with one `EXTCODECOPY`), removing ~128 cold `SLOAD`s/tick
+(~270k) on the 64×64 level. A full E1L1 tick (12 guards, 22 doors, 48 items) is now ~397k: each door
+adds ~2.8k and each item ~2.4k (packed dynamic word/bit + the per-tick `MoveDoors`/`GetBonus` scans +
+`Map.doors()`/`Map.items()` storage reads). **Next gas lever:** move doors/items to SSTORE2 like the
+tilemap and skip the per-tick scans when nothing's near the player.
 
 ## How it's verified
 
 Per `DESIGN.md`: the C `sim_oracle` (carved from id's source) replays an input vector and emits
 per-tick **golden vectors**; the Rust harness deploys the contracts on anvil, replays the same
 inputs through `Session.submitInput`, and asserts the decoded state matches the golden vector
-**tic-by-tic** (player pose/health/ammo, every guard field, every door's position/action/ticcount,
-and the RNG index). All five scenarios pass.
+**tic-by-tic** (player pose/health/ammo/keys/score, every guard field, every door's
+position/action/ticcount, every item's taken bit, and the RNG index). All six scenarios pass.
 
 ## Run it
 
@@ -90,7 +95,8 @@ anvil --silent &
 
 - **Gas**: state re-pack ✅ and SSTORE2 map ✅ are done; the remaining levers are per-actor
   packing (re-encoding every actor each tick) and capping live-actor count.
-- **M3**: dormant guards + line-of-sight ✅, doors ✅ (player Use + guard-opens-door + sliding LOS
-  gating, differential-verified `door_use`/`door_guard`); next: pickups, other enemy types
-  (dog/SS/officer), actor-vs-actor `actorat` collision, `SessionFactory`.
+- **M3**: dormant guards + line-of-sight ✅, doors ✅, pickups ✅ (ammo/health/keys/treasure, keys
+  unlock doors; differential-verified `item_pickup`); next: other enemy types (dog/SS/officer),
+  actor-vs-actor `actorat` collision, `SessionFactory`.
+- **Gas**: move doors/items to SSTORE2 (like the tilemap) and gate the per-tick scans on proximity.
 - **M4**: MegaETH deploy (plain redeploy), popup-free play via session keys, first-person renderer.

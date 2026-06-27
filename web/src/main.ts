@@ -38,23 +38,28 @@ let tiles = new Uint16Array(W * H); // runtime tilemap: 1..89 wall, 0x80|n door,
 let spawnTile = { x: 8, y: 8, dir: 1 }; // engine dir: angle = (1-dir)*90 ; 1 = east
 let guardTiles: number[][] = [[12, 8]];
 let doorList: number[][] = []; // [tilex, tiley, vertical|lock<<1] in doornum order
+let itemList: number[][] = []; // [tilex, tiley, itemnumber] bonus items
 let levelName = "test room";
 
 const isWall = (v: number) => v >= 1 && v < 90; // 1..89 = solid wall texture
 const isDoor = (v: number) => (v & 0x80) !== 0; // 0x80|doornum
+// item char -> stat_t bonus number (matches the oracle map loader)
+const ITEM_CHARS: Record<string, number> = { a: 14, h: 5, k: 6, t: 10 };
 
 function initTestRoom() {
   // a room split by a N–S wall with a door (7,8); spawn faces it, a guard waits
-  // behind. Press E to open the door, or fire (the noise wakes the guard).
+  // behind. Walk over the ammo (5,8), open the door (E), grab the treasure (9,8)
+  // and gold key (10,8). Fire (Space) makes noise that also wakes the guard.
   const MAP = [
     "################", "#......#.......#", "#......#.......#", "#......#.......#",
     "#......#.......#", "#......#.......#", "#......#.......#", "#......#.......#",
-    "#......D.......#", "#......#.......#", "#......#.......#", "#......#.......#",
+    "#....a.D.tk....#", "#......#.......#", "#......#.......#", "#......#.......#",
     "#......#.......#", "#......#.......#", "#......#.......#", "################",
   ];
   W = 16; H = 16;
   tiles = new Uint16Array(W * H);
   doorList = [];
+  itemList = [];
   let doornum = 0;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
@@ -64,11 +69,13 @@ function initTestRoom() {
         tiles[y * W + x] = 0x80 | doornum;
         doorList.push([x, y, c === "D" ? 1 : 0]); // vertical|lock<<1, lock 0
         doornum++;
-      } else tiles[y * W + x] = 0;
+      } else if (ITEM_CHARS[c] !== undefined) {
+        itemList.push([x, y, ITEM_CHARS[c]]);
+      } // else floor (0)
     }
   spawnTile = { x: 4, y: 8, dir: 1 };
   guardTiles = [[11, 8, 2]]; // behind the door, facing west
-  levelName = "test room (door demo)";
+  levelName = "test room (door + item demo)";
 }
 initTestRoom();
 
@@ -82,6 +89,7 @@ async function loadLevel(): Promise<boolean> {
     spawnTile = { x: L.spawn.x, y: L.spawn.y, dir: L.spawn.dir };
     levelName = L.name ?? "level";
     doorList = (L.doors as number[][] | undefined) ?? [];
+    itemList = (L.items as number[][] | undefined) ?? [];
     guardTiles = (L.guards as number[][])
       .map(([x, y, dir]) => ({ x, y, dir: dir ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
       .sort((a, b) => a.d - b.d)
@@ -109,6 +117,12 @@ function guardsHex(): Hex {
 function doorsHex(): Hex {
   const b = new Uint8Array(doorList.length * 3);
   doorList.forEach(([x, y, pk], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = pk ?? 0; });
+  return bytesToHex(b);
+}
+// items blob: 3 bytes each (tilex, tiley, itemnumber)
+function itemsHex(): Hex {
+  const b = new Uint8Array(itemList.length * 3);
+  itemList.forEach(([x, y, n], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = n; });
   return bytesToHex(b);
 }
 // per-doornum open fraction (0 closed .. 1 open), refreshed each frame from state
@@ -148,9 +162,10 @@ type State = {
   rndindex: number;
   player: {
     x: number; y: number; angle: number; tilex: number; tiley: number;
-    health: number; ammo: number; attackcount: number;
+    health: number; ammo: number; attackcount: number; keys: number; score: number;
   };
   doors: Door[];
+  itemsTaken: boolean[];
   guards: Guard[];
 };
 
@@ -159,15 +174,22 @@ function decode(hex: string): State {
   const header = w[0];
   const n = fld(header, 8, 8);
   const nd = fld(header, 16, 8);
+  const ni = fld(header, 24, 16);
+  const iw = ni === 0 ? 0 : Math.ceil(ni / 256);
   const pw = w[1];
   const doors: Door[] = [];
   for (let i = 0; i < nd; i++) {
     const d = w[2 + i]; // door word: action@0, ticcount@16, position@32
     doors.push({ action: fld(d, 0, 8), position: fld(d, 32, 16) });
   }
+  const itemsTaken: boolean[] = []; // bitmask words after the doors
+  for (let i = 0; i < ni; i++) {
+    const bits = w[2 + nd + Math.floor(i / 256)];
+    itemsTaken.push(((bits >> BigInt(i % 256)) & 1n) === 1n);
+  }
   const guards: Guard[] = [];
   for (let i = 0; i < n; i++) {
-    const a = w[2 + nd + i];
+    const a = w[2 + nd + iw + i];
     guards.push({
       x: sfld(a, 0, 32),
       y: sfld(a, 32, 32),
@@ -187,8 +209,11 @@ function decode(hex: string): State {
       health: sfld(pw, 128, 16),
       ammo: sfld(pw, 144, 16),
       attackcount: sfld(pw, 160, 16),
+      keys: fld(pw, 184, 8),
+      score: fld(pw, 192, 32),
     },
     doors,
+    itemsTaken,
     guards,
   };
 }
@@ -565,6 +590,41 @@ function drawGuard(px: number, py: number, pa: number, g: Guard, clock: number) 
   }
 }
 
+// bonus item billboard colour by stat_t category
+function itemColor(n: number): string {
+  if (n >= 6 && n <= 9) return "#f4d03f"; // key — gold
+  if (n >= 10 && n <= 13) return "#48d1cc"; // treasure — cyan
+  if (n === 3 || n === 4 || n === 5 || n === 18 || n === 19) return "#6cc6ff"; // health — blue
+  return "#f1c40f"; // ammo — yellow
+}
+
+// draw not-yet-taken bonus items as small floor-standing markers, wall-occluded
+function drawItems(px: number, py: number, pa: number, s: State) {
+  for (let i = 0; i < itemList.length; i++) {
+    if (s.itemsTaken[i]) continue;
+    const [tx, ty, n] = itemList[i];
+    const dx = (tx + 0.5) * U - px, dy = (ty + 0.5) * U - py;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1) continue;
+    const rel = normDeg(Math.atan2(-dy, dx) / DR - pa);
+    if (Math.abs(rel) > FOV / 2 + 10) continue;
+    const perp = dist * Math.cos(rel * DR);
+    if (perp < 1) continue;
+    const cx = VW / 2 - (rel / (FOV / 2)) * (VW / 2);
+    const col = Math.floor(cx);
+    if (col < 0 || col >= VW || perp > zbuf[col] + 0.5) continue; // off-screen / behind a wall
+    const wallH = (U / perp) * PROJ;
+    const floorY = VH / 2 + wallH / 2;
+    const sz = Math.max(2, wallH * 0.2);
+    vctx.fillStyle = "rgba(0,0,0,0.35)";
+    vctx.fillRect(cx - sz / 2, floorY - sz / 7, sz, sz / 7); // shadow
+    vctx.fillStyle = itemColor(n);
+    vctx.fillRect(cx - sz / 2, floorY - sz, sz, sz); // marker
+    vctx.fillStyle = "rgba(255,255,255,0.5)";
+    vctx.fillRect(cx - sz / 2, floorY - sz, sz, Math.max(1, sz / 6)); // glint
+  }
+}
+
 function renderView(s: State, clock: number, fx: Fx) {
   const px = toU(s.player.x), py = toU(s.player.y), pa = s.player.angle;
 
@@ -611,6 +671,9 @@ function renderView(s: State, clock: number, fx: Fx) {
       vctx.fillRect(c, top, 1, lineH);
     }
   }
+
+  // bonus items (floor markers) then guards on top
+  drawItems(px, py, pa, s);
 
   // guards (depth-sorted far→near so nearer overdraw wins)
   const order = s.guards
@@ -752,8 +815,10 @@ function renderHud(s: State, gas: number | null, clock: number, fx: Fx) {
   cell(0, 120, "FLOOR", "1", "#9cf");
   cell(120, 130, "HEALTH", hp + "%", hpColor);
   drawFace(295, 42, hp, clock < fx.damageUntil);
-  cell(330, 120, "AMMO", String(Math.max(0, s.player.ammo)), s.player.ammo > 0 ? "#fd6" : "#f55");
-  cell(450, 190, "GAS / INPUT", gas != null ? (gas / 1000).toFixed(1) + "k" : "—", "#6cf");
+  cell(330, 110, "AMMO", String(Math.max(0, s.player.ammo)), s.player.ammo > 0 ? "#fd6" : "#f55");
+  const keyTag = (s.player.keys & 1 ? " G" : "") + (s.player.keys & 2 ? " S" : ""); // gold/silver
+  cell(440, 95, "SCORE", String(s.player.score) + keyTag, "#fd6");
+  cell(535, 105, "GAS", gas != null ? (gas / 1000).toFixed(0) + "k" : "—", "#6cf");
 }
 
 // authentic Wolf3D status bar: the real STATUSBARPIC + white digit font + the BJ
@@ -775,12 +840,18 @@ function renderHudReal(s: State, A: Assets, clock: number) {
       x++;
     }
   };
-  const kills = s.guards.filter((g) => isDead(g.state)).length;
   num(1, 2, 2);                              // LEVEL (floor 1)
-  num(kills * 100, 6, 6);                    // SCORE (100 pts per guard killed)
+  num(s.player.score, 6, 6);                 // SCORE (on-chain: treasure pickups)
   num(1, 14, 1);                             // LIVES
   num(s.player.health, 21, 3);               // HEALTH
   num(s.player.ammo, 27, 2);                 // AMMO
+
+  // gold/silver key indicators when held (the real bar has empty key slots)
+  for (let k = 0; k < 2; k++)
+    if (s.player.keys & (1 << k)) {
+      hctx.fillStyle = k === 0 ? "#f4d03f" : "#cfd8dc";
+      hctx.fillRect(30 * 8 * S, (4 + k * 16) * S, 6 * S, 12 * S);
+    }
 
   // BJ face: FACE1APIC + 3*level + look; level by health, FACE8 (level 7) when dead
   const hp = s.player.health;
@@ -908,7 +979,7 @@ async function main() {
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(),
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
-    guardsHex(), doorsHex(),
+    guardsHex(), doorsHex(), itemsHex(),
   ]);
   const session = await deploy(SessionA, [engine, map]);
 

@@ -47,6 +47,9 @@ struct Snap {
     rng: Option<i64>,
     guards: Vec<[i64; 7]>, // x,y,dir,st,hp,tc,dist
     doors: Vec<[i64; 3]>,  // pos,act,tc
+    items: Vec<i64>,       // taken (0/1) per item
+    keys: i64,
+    score: i64,
 }
 
 fn load_golden(path: &str) -> Result<Vec<Snap>> {
@@ -69,11 +72,20 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
                 doors.push([f("pos"), f("act"), f("tc")]);
             }
         }
+        let mut items = Vec::new();
+        if let Some(arr) = v.get("items").and_then(|x| x.as_array()) {
+            for it in arr {
+                items.push(it.as_i64().unwrap());
+            }
+        }
         out.push(Snap {
             player: [g("x")?, g("y")?, g("angle")?, g("tilex")?, g("tiley")?, g("anglefrac")?, g("health")?, g("ammo")?, g("acount")?],
             rng: v.get("rng").and_then(|x| x.as_i64()),
             guards,
             doors,
+            items,
+            keys: v.get("keys").and_then(|x| x.as_i64()).unwrap_or(0),
+            score: v.get("score").and_then(|x| x.as_i64()).unwrap_or(0),
         });
     }
     Ok(out)
@@ -83,7 +95,7 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
 /// wall, `doornum|0x80` = door, 0 = floor. Door chars match the oracle map loader
 /// ('D' vertical, 'd' horizontal, lock 0), with doornum in y-major scan order, and
 /// also returns the Map door bytes (3/door: tilex, tiley, vertical|lock<<1).
-fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>)> {
+fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>)> {
     let txt = fs::read_to_string(repo(path))?;
     let mut lines = txt.lines();
     let hdr = lines.next().ok_or_else(|| anyhow!("empty map"))?;
@@ -92,12 +104,15 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>)> {
     let h: u64 = it.next().unwrap().parse()?;
     let mut tiles = vec![0u8; (w * h) as usize];
     let mut doors = Vec::new();
+    let mut items = Vec::new();
     let mut doornum: u8 = 0;
     for y in 0..h {
         let row = lines.next().ok_or_else(|| anyhow!("map too short"))?;
         let bytes = row.as_bytes();
         for x in 0..w {
             let c = *bytes.get(x as usize).unwrap_or(&b'.');
+            // item chars match the oracle map loader (bo_clip/firstaid/key1/cross)
+            let item = |b: u8| [x as u8, y as u8, b];
             match c {
                 b'#' => tiles[(y * w + x) as usize] = 1,
                 b'D' | b'd' => {
@@ -106,11 +121,15 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>)> {
                     doors.extend_from_slice(&[x as u8, y as u8, vertical]); // lock 0
                     doornum += 1;
                 }
+                b'a' => items.extend_from_slice(&item(14)), // bo_clip
+                b'h' => items.extend_from_slice(&item(5)),  // bo_firstaid
+                b'k' => items.extend_from_slice(&item(6)),  // bo_key1
+                b't' => items.extend_from_slice(&item(10)), // bo_cross
                 _ => {}
             }
         }
     }
-    Ok((w, h, tiles, doors))
+    Ok((w, h, tiles, doors, items))
 }
 
 /// Parse "cx cy buttons" lines (skip blank / '#').
@@ -136,6 +155,8 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     let rnd = field(header, 0, 8) as i64;
     let n = field(header, 8, 8) as usize;
     let nd = field(header, 16, 8) as usize;
+    let ni = field(header, 24, 16) as usize;
+    let iw = if ni == 0 { 0 } else { (ni + 255) / 256 };
 
     let pw = word(state, 1);
     let player = [
@@ -151,6 +172,11 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     ];
     if player != want.player {
         bail!("tic {tick} PLAYER mismatch\n  got  {:?}\n  want {:?}", player, want.player);
+    }
+    let keys = field(pw, 184, 8) as i64;
+    let score = field(pw, 192, 32) as i64;
+    if keys != want.keys || score != want.score {
+        bail!("tic {tick} KEYS/SCORE mismatch: got keys {keys} score {score}, want {} {}", want.keys, want.score);
     }
     if let Some(wr) = want.rng {
         if rnd != wr {
@@ -169,12 +195,23 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
             bail!("tic {tick} DOOR{k} mismatch\n  got  {:?}\n  want {:?}", got, want.doors[k]);
         }
     }
+    // items: iw bitmask words after the doors; bit i = item i taken
+    if ni != want.items.len() {
+        bail!("tic {tick} item count: got {} want {}", ni, want.items.len());
+    }
+    for k in 0..ni {
+        let bits = word(state, 2 + nd + k / 256);
+        let taken = field(bits, k % 256, 1) as i64;
+        if taken != want.items[k] {
+            bail!("tic {tick} ITEM{k} taken: got {} want {}", taken, want.items[k]);
+        }
+    }
 
     if n != want.guards.len() {
         bail!("tic {tick} guard count: got {} want {}", n, want.guards.len());
     }
     for k in 0..n {
-        let aw = word(state, 2 + nd + k);
+        let aw = word(state, 2 + nd + iw + k);
         // golden guard order: x, y, dir, state, hp, ticcount, distance
         let got = [
             s32(aw, 0),
@@ -209,10 +246,12 @@ async fn main() -> Result<()> {
          "vectors/door_use.golden.jsonl", (4, 8, 1), vec![]),
         ("door_guard", "oracle/maps/door_room.txt", "vectors/door_guard.input.txt",
          "vectors/door_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2]),
+        ("item_pickup", "oracle/maps/item_room.txt", "vectors/item_pickup.input.txt",
+         "vectors/item_pickup.golden.jsonl", (2, 8, 1), vec![13, 8, 2]),
     ];
 
     for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {
-        let (w, h, tiles, doors) = load_map(mapf)?;
+        let (w, h, tiles, doors, items) = load_map(mapf)?;
         let inputs = load_inputs(inf)?;
         let golden = load_golden(goldf)?;
 
@@ -222,6 +261,7 @@ async fn main() -> Result<()> {
             U256::from(*sx), U256::from(*sy), U256::from(*sdir),
             Bytes::from(guards.clone()),
             Bytes::from(doors),
+            Bytes::from(items),
         ).await?;
         let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address()).await?;
 

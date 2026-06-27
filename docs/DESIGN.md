@@ -27,23 +27,27 @@ Session  per-game packed world state                    raycaster view       gol
   `(state, map, cmd)`, so it's exactly what the differential test targets. Helper libs: `Fixed`
   (16.16 + `FixedByFrac`), `Trig` (baked sin/cos), `Rng` (baked `rndtable`).
 - **`Map`** (immutable) — tilemap (door tiles encoded `doornum|0x80`) + guard spawn list + door list
-  (`tilex,tiley,vertical,lock` per door, in doornum order). The tilemap is stored **SSTORE2-style**
-  (a data contract's bytecode, read each tick via one `EXTCODECOPY`); guards/doors are in storage.
+  (`tilex,tiley,vertical,lock`) + item list (`tilex,tiley,itemnumber`). The tilemap is stored
+  **SSTORE2-style** (a data contract's bytecode, read each tick via one `EXTCODECOPY`); guards/doors/
+  items are in storage (moving doors/items to SSTORE2 is the next gas lever).
 - **`Session`** (stateful) — the single source of truth for a live game: holds the packed world
   state + immutable `engine`/`map` addresses. `engine`/`map` are immutable so a live game's rules can
   never change underneath it.
 
 ### Packed world state
 
-`Session.state` is `header · player word · one word per door · one word per actor` (replacing an
-`abi.encode` blob — ~40% gas cut). Bit layout (LSB first), kept in lockstep across `Engine.sol`, the
-harness, and the web decoder:
+`Session.state` is `header · player word · one word per door · item-taken bitmask · one word per actor`
+(replacing an `abi.encode` blob — ~40% gas cut). Bit layout (LSB first), kept in lockstep across
+`Engine.sol`, the harness, and the web decoder:
 
-- **header**: `rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16`
+- **header**: `rndindex:uint8@0 | numactors:uint8@8 | numdoors:uint8@16 | numitems:uint16@24`
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
-  tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176`
+  tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176 |
+  keys:uint8@184 | score:uint32@192`
 - **door**: `action:uint8@0 | ticcount:int16@16 | position:uint16@32` (the static tilex/tiley/
   vertical/lock come from the `Map`, indexed by doornum = scan order)
+- **items**: `ceil(numitems/256)` words; bit *i* = item *i* taken (the static tilex/tiley/itemnumber
+  come from the `Map`). The dynamic per-item state is one bit, so the whole list packs into ~one word.
 - **actor**: `x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88
   | ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 | obclass:uint8@168
   | speed:int32@176 | active:uint8@208 | temp2:int16@216`
@@ -85,6 +89,12 @@ are deviations from id's *render-coupled* code, not between our two implementati
   faithful; only the screen-pixel `shootdelta` cone (render-config-specific) is dropped.
 - **Weapon animation → cooldown.** The `Cmd_Fire`/`T_Attack`/`attackinfo` weapon state machine is
   replaced by a simple per-tick fire cooldown (`ATTACKRATE`).
+- **Pickups trigger on the player's tile.** id picks up a bonus during the 3D refresh, when its tile
+  transforms onto the player (`WL_DRAW.C` `TransformTile`). Headless there's no refresh, so a bonus is
+  taken when `player tile == item tile` — an identical-on-both-sides choice, like `FL_VISABLE`. The
+  effects (`GetBonus`: ammo/health clamps, "skip if full", keys, score) are faithful; only render/audio
+  bits (bonus flash, `treasurecount`, lives/`GiveExtraMan`, weapon switching) are dropped — weapon
+  pickups still grant their `GiveAmmo(6)`, and kill-points are not awarded (score is treasure only).
 - **All actors think every tic.** Wolf3D gates an actor's processing on `ob->active`, which the
   renderer flips on when the actor is drawn. Headless, there's no renderer, so we process every
   actor every tic (like `FL_VISABLE`, an identical-on-both-sides choice). This is what lets a
