@@ -62,6 +62,14 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   the health-driven BJ face — all from on-chain state. **No id art/level is committed**; the client
   falls back to procedural art + a test room when no data is present. Every format/palette/chunk-number
   comes from id's GPL source in `reference/`.
+- **An authentic Wolf3D look (M5)** — the first-person view renders **flat-lit** (no distance shading —
+  id's VGA renderer has none; N/S faces darken only via the dark texture page) at a native **320×200 /
+  4:3 chunky** resolution inside the beveled **play border**, with **real per-class enemy sprites**
+  (guard/SS/dog each draw their own VSWAP frame tables; the officer — not an episode-1 enemy — falls
+  back to the guard sprite), **decorative scenery** billboards (lamps, plants, tables, ceiling lights —
+  73 statics on E1L1, extracted from plane 1 by `map-extract`), and the status bar's **weapon slot**
+  showing the real pistol pic above the health-driven BJ face. All render-side — the on-chain sim is
+  unchanged.
 
 ## Milestones
 
@@ -74,13 +82,13 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M2c** hitscan combat | ✅ | guard shoots player + player kills guard; pain/death; ammo |
 | **M3** world completeness | ✅ | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; **dormant guards + line-of-sight** ✅; **doors** ✅; **pickups** (ammo/health/keys/treasure, keys unlock doors) ✅; **actor-vs-actor collision** ✅; **SS trooper** (4-shot burst, 100 HP) ✅; **dog** (melee, 1 HP) ✅; **officer** (speed ×5, 50 HP) ✅ — full E1 roster; **`SessionFactory`** (many games, one engine/map) ✅ |
 | **M4** on-chain UX + client engine | ✅ | **session-key delegation** (owner + `delegate`/`revoke`, time-boxed burner keys, popup-free `submitInput`); **`Deploy.s.sol`** one-command stack deploy (test room or a real level via `MAP_JSON`); **web burner/auto-sign UX**; **client-side prediction** — the carved C sim compiled to wasm (clang `--target=wasm32`) predicts locally, reconciled byte-for-byte vs the chain by a parallel reconciler; **wasm wall renderer** (Emscripten, id's `WL_DRAW.C` math) + the player **death sequence**; **fixed-timestep 70-tics/s** via fire-and-forget pipelined submission; **area connectivity** — faithful sound localization (`ConnectAreas`/`areabyplayer`) |
+| **M5** authentic Wolf3D look | ✅ | **flat lighting** (no distance shading — N/S faces darkened only by the dark VSWAP page, as id's VGA renderer did); **320×200 / 4:3 chunky framed viewport** (native-res internal buffer + beveled play border); **real per-class enemy sprites + frame tables** (guard/SS/dog each draw their own VSWAP frames via per-`obclass` `ENEMY_FRAMES`; the officer — absent from the episode-1 shareware — falls back to the guard sprite, and loads its own from registered `.WL6`); **decorative scenery** (`map-extract` emits plane-1 statics → the client billboards lamps/plants/tables/ceiling-lights — 73 on E1L1; render-only, off-chain); **HUD weapon slot** (real pistol pic) above the already-animated BJ face + live counters |
 
 ### Roadmap (fresh milestone set)
 
 | | status | scope |
 |---|---|---|
-| **M5** authentic Wolf3D look | ⬜ | flat lighting (no distance shading); decorative scenery sprites; real per-class enemy sprites + frame tables; 320×200 / 4:3 chunky view + framed viewport; HUD polish (weapon slot, animated BJ face, counters) |
-| **M6** weapons & world completeness | ⬜ | weapon roster + switching (knife/pistol/MG/chaingun); pushwalls (secret walls); elevator + level exit + level→level flow; blocking-decoration collision |
+| **M6** weapons & world completeness | ⬜ | weapon roster + switching (knife/pistol/MG/chaingun); pushwalls (secret walls); elevator + level exit + level→level flow; blocking-decoration collision (the M5 scenery is render-only until then) |
 | **M7** audio | ⬜ | digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas |
 | **M8** presentation shell | ⬜ | title / menu / "Get Psyched!" / level-intermission tally / episode flow |
 | **M9** MegaETH deployment | ⛔ | deploy to MegaETH testnet; fire-and-forget session-key play at ~native rate; end-to-end latency + gas (needs an RPC + funded key) |
@@ -155,6 +163,11 @@ anvil --silent &
 
 ## Next
 
+- **M5 ✅ done** — the authentic Wolf3D look (flat lighting · native 320×200/4:3 framed viewport ·
+  real per-class enemy sprites · decorative scenery · HUD weapon slot), all render-side. Next is
+  **M6** (weapons & world completeness): the weapon roster + switching, pushwalls, the elevator /
+  level-exit / level→level flow, and **blocking-decoration collision** (M5's scenery is render-only
+  until M6 gives the blocking statics their collision back).
 - **Gas**: state re-pack ✅ and SSTORE2 map ✅ are done; the remaining levers are per-actor
   packing (re-encoding every actor each tick) and capping live-actor count.
 - **M3**: dormant guards + line-of-sight ✅, doors ✅, pickups ✅ (ammo/health/keys/treasure, keys
