@@ -783,13 +783,27 @@ function renderView(s: State, clock: number, fx: Fx) {
   }
 
   if (s.player.health <= 0) {
-    vctx.fillStyle = "rgba(60,0,0,0.55)";
+    // Wolf3D death sequence: the view sinks while the screen fades to red over ~1.1s,
+    // then "YOU DIED". (Render-only; the sim just reports health <= 0.)
+    if (deathAt === 0) deathAt = clock;
+    const t = Math.min(1, (clock - deathAt) / 1100);
+    const sink = Math.floor(t * VH * 0.55);
+    if (sink > 0) {
+      vctx.drawImage(view, 0, 0, VW, VH, 0, sink, VW, VH); // shift the composed scene down
+      vctx.fillStyle = "#000";
+      vctx.fillRect(0, 0, VW, sink); // black above the sinking view
+    }
+    vctx.fillStyle = `rgba(150,0,0,${0.72 * t})`; // screen reddens
     vctx.fillRect(0, 0, VW, VH);
-    vctx.fillStyle = "#f55";
-    vctx.font = "bold 48px ui-monospace, monospace";
-    vctx.textAlign = "center";
-    vctx.fillText("YOU DIED", VW / 2, VH / 2);
-    vctx.textAlign = "left";
+    if (t >= 1) {
+      vctx.fillStyle = "#f55";
+      vctx.font = "bold 48px ui-monospace, monospace";
+      vctx.textAlign = "center";
+      vctx.fillText("YOU DIED", VW / 2, VH / 2);
+      vctx.textAlign = "left";
+    }
+  } else if (deathAt !== 0) {
+    deathAt = 0; // revived (new game) — reset the sequence
   }
 }
 
@@ -1041,6 +1055,7 @@ let predictLabel = "off (chain-only)"; // client-side prediction status
 let renderLabel = "ts raycaster"; // wall renderer: wasm vs TS raycaster
 let tps = 0; // confirmed ticks/sec (rolling 1s window)
 const TICK_HZ = 70; // fixed-timestep target — Wolf3D's native time base; we sustain more
+let deathAt = 0; // clock (ms) when the player's health first hit 0, for the death sequence
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 function renderDbg(s: State, tick: number, gas: number | null) {
