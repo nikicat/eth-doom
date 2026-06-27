@@ -1039,6 +1039,7 @@ function renderMap(s: State) {
 let sessionKeyLabel = "—";
 let predictLabel = "off (chain-only)"; // client-side prediction status
 let renderLabel = "ts raycaster"; // wall renderer: wasm vs TS raycaster
+let tps = 0; // confirmed ticks/sec (rolling 1s window)
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 function renderDbg(s: State, tick: number, gas: number | null) {
@@ -1046,6 +1047,7 @@ function renderDbg(s: State, tick: number, gas: number | null) {
   dbg.textContent =
     `level     ${levelName} ${W}x${H}\n` +
     `tick      ${tick}\n` +
+    `tickrate  ${tps.toFixed(0)} tics/s\n` +
     `gas/tick  ${gas != null ? `${(gas / 1000).toFixed(0)}k (${gas.toLocaleString("en-US")})` : "—"}\n` +
     `signer    ${sessionKeyLabel}\n` +
     `predict   ${predictLabel}\n` +
@@ -1188,6 +1190,15 @@ async function main() {
   }
   requestAnimationFrame(frame);
 
+  // rolling tickrate: count confirmations in the last second
+  const confTimes: number[] = [];
+  const markTick = () => {
+    const now = performance.now();
+    confTimes.push(now);
+    while (confTimes.length && confTimes[0] < now - 1000) confTimes.shift();
+    tps = confTimes.length;
+  };
+
   // a damage/muzzle flash when health/ammo drop between two states
   const applyFx = (before: State, after: State) => {
     const now = performance.now();
@@ -1195,56 +1206,75 @@ async function main() {
     if (after.player.health < before.player.health) fx.damageUntil = now + 380;
   };
 
-  // tx loop — one submitInput per step. Signed by the BURNER (session key), so no
-  // wallet popup per tick. With the predictor on, we render the locally-predicted
-  // state IMMEDIATELY (decoupled from tx latency) and reconcile against the chain by
-  // a byte compare once it confirms. (On a low-latency chain we'd skip awaiting each
-  // receipt and track the nonce locally; anvil mines instantly.)
+  // tx loop — one submitInput per step, signed by the BURNER (session key), no popup.
+  //
+  // Fast path (predictor on): the predictor is differential-proven equal to the chain,
+  // so the chain read is OFF the hot path. We render the predicted state immediately and
+  // submit FIRE-AND-FORGET — local nonce + fixed gas/gasPrice collapse writeContract to a
+  // single sendRawTransaction (no per-tick estimateGas / nonce fetch / fee history), and
+  // we don't await each receipt or re-read state. Every SYNC_EVERY ticks we let the chain
+  // catch up and verify the prediction byte-for-byte (resyncing on the should-never-happen
+  // mismatch). Chain-only fallback (no predictor) still awaits + reads each tick.
+  const SYNC_EVERY = 60;
+  let nonce = await pub.getTransactionCount({ address: burner.address });
+  const gasPrice = await pub.getGasPrice();
+  const GAS = 600000n; // generous fixed limit (an E1L1 tick is ~245k) — skips estimateGas
+  const submit = (c: ReturnType<typeof cmd>): Promise<Hex | undefined> =>
+    burnerWallet.writeContract({
+      address: session, abi: SessionA.abi, functionName: "submitInput", args: [c],
+      nonce: nonce++, gas: GAS, gasPrice,
+    }).catch((e) => (console.warn("submit failed @", tick, e), undefined));
+
+  // pipeline: keep up to MAXINFLIGHT sends outstanding (don't block on each round-trip);
+  // await the oldest only when the window is full. The predictor renders instantly so the
+  // tx loop never gates the view.
+  const MAXINFLIGHT = 24;
+  const inflight: Promise<Hex | undefined>[] = [];
+
   for (;;) {
     const before = latest!;
     const c = cmd();
 
-    // 1. PREDICT locally — instant feedback, no round-trip
-    let predHex: Hex | null = null;
     if (predictEnabled && predictor) {
+      // predict locally (instant render) + submit fire-and-forget into the pipeline
       predictor.step(Number(c.controlx), Number(c.controly), c.buttons);
-      predHex = predictor.read();
-      const pred = decode(predHex);
+      const pred = decode(predictor.read());
       applyFx(before, pred);
       latest = pred;
-      tick++; // predicted tick runs ahead of the confirmed one
-    }
+      tick++;
+      inflight.push(submit(c));
+      markTick();
+      if (inflight.length > MAXINFLIGHT) await inflight.shift(); // bound the window (+ yield)
 
-    // 2. SUBMIT to the chain (authoritative)
-    const hash = await burnerWallet.writeContract({
-      address: session, abi: SessionA.abi, functionName: "submitInput", args: [c],
-    });
-    const receipt = await pub.waitForTransactionReceipt({ hash });
-    lastGas = Number(receipt.gasUsed);
-    confTick++;
-
-    // 3. RECONCILE the prediction against the confirmed chain state
-    const chainHex = await getStateHex();
-    if (predHex) {
-      predTotal++;
-      if (chainHex.toLowerCase() === predHex.toLowerCase()) {
-        predOk++;
-      } else {
-        // never expected (predictor is the same sim) — trust the chain, stop predicting
-        console.warn(`[predict] reconcile mismatch @ tick ${confTick}; falling back to chain`);
-        predictEnabled = false;
-        latest = decode(chainHex);
+      // periodic sync: drain the pipeline, let the chain finish, verify it agrees
+      if (tick % SYNC_EVERY === 0) {
+        const hashes = await Promise.all(inflight.splice(0));
+        const last = hashes.filter(Boolean).pop();
+        if (last) lastGas = Number((await pub.waitForTransactionReceipt({ hash: last })).gasUsed);
+        confTick = Number(await pub.readContract({ address: session, abi: SessionA.abi, functionName: "tickCount" }));
+        const chainHex = await getStateHex();
+        predTotal++;
+        if (chainHex.toLowerCase() === predictor.read().toLowerCase()) predOk++;
+        else {
+          console.warn(`[predict] reconcile mismatch @ ${confTick}; falling back to chain`);
+          predictEnabled = false;
+          latest = decode(chainHex);
+        }
       }
       predictLabel = predictEnabled
-        ? `wasm ✓ ${predOk}/${predTotal} match · pred ${tick} / conf ${confTick}`
+        ? `wasm ✓ ${predOk}/${predTotal} syncs · pred ${tick} / conf ${confTick}`
         : `off (diverged @ ${confTick})`;
     } else {
-      const after = decode(chainHex);
+      // chain-only: must read state each tick, so await the receipt
+      const hash = await submit(c);
+      if (hash) lastGas = Number((await pub.waitForTransactionReceipt({ hash })).gasUsed);
+      confTick++;
+      markTick();
+      const after = decode(await getStateHex());
       applyFx(before, after);
       latest = after;
       tick++;
     }
-    await new Promise((r) => setTimeout(r, 16));
   }
 }
 

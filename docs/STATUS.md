@@ -44,6 +44,9 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   The textured **wall view is rendered in WebAssembly** too (`renderer/build.sh`, Emscripten): id's
   `WL_DRAW.C` wall math + a portable ray cast fill an RGBA framebuffer + per-column depth that the
   client blits, with sprites/gun/HUD drawn in TS on top (falls back to the TS raycaster if unbuilt).
+  Because prediction takes the chain read off the hot path, the burner submits **fire-and-forget**
+  (local nonce + fixed gas, a pipelined in-flight window, verified at periodic sync points), pushing
+  the live tickrate to **~120–145 tics/s on anvil** — past Wolf3D's native 35 Hz (shown in the HUD).
 - **Authentic id art + the real first level, runtime-loaded** — `scripts/fetch-shareware.sh` downloads
   the freely-distributable Wolf3D shareware and the Rust extractors decode it: `wl-extract` does
   **VSWAP** → wall textures + guard sprites + the player pistol and **VGAGRAPH** (Huffman + VGA-planar)
