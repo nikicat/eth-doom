@@ -227,6 +227,10 @@ function castRay(px: number, py: number, ra: number): { dist: number; vertical: 
 // default, in which case the renderer falls back to the procedural art below.
 // ---------------------------------------------------------------------------
 const WALL_TEX = 0; // wall page used for our 0/1 map (0 = dark face, 1 = light face)
+// player pistol viewmodel frames (sprite indices in this shareware's VSWAP, found
+// empirically: 425 ready, 426 the muzzle-flash fire frame, 427/428 recoil).
+const PISTOL_READY = 425;
+const PISTOL_FIRE = [426, 427, 428];
 type Assets = { wall: HTMLCanvasElement; wallLit: HTMLCanvasElement; sprites: Map<number, HTMLCanvasElement> };
 let assets: Assets | null = null;
 
@@ -266,8 +270,9 @@ async function loadAssets(): Promise<Assets | null> {
   if (!wall) return null;
   const wallLit = (await loadImg64(`/wolf/wall_${p3(WALL_TEX + 1)}.png`)) ?? wall;
   const sprites = new Map<number, HTMLCanvasElement>();
-  for (let i = 50; i <= 98; i++) {
-    // guard frames: SPR_GRD_S_1=50 … SPR_GRD_SHOOT3=98
+  const need = [PISTOL_READY, ...PISTOL_FIRE]; // player pistol
+  for (let i = 50; i <= 98; i++) need.push(i); // guard frames: SPR_GRD_S_1=50 … SPR_GRD_SHOOT3=98
+  for (const i of need) {
     const c = await loadImg64(`/wolf/sprite_${p3(i)}.png`);
     if (c) sprites.set(i, c);
   }
@@ -442,16 +447,11 @@ function drawGuard(px: number, py: number, pa: number, g: Guard, clock: number) 
 function renderView(s: State, clock: number, fx: Fx) {
   const px = toU(s.player.x), py = toU(s.player.y), pa = s.player.angle;
 
-  // ceiling + floor
-  const ceil = vctx.createLinearGradient(0, 0, 0, VH / 2);
-  ceil.addColorStop(0, "#23262e");
-  ceil.addColorStop(1, "#3a4150");
-  vctx.fillStyle = ceil;
+  // ceiling + floor — Wolf3D draws these as flat colors, not textures:
+  // floor is palette 0x19 (gray); E1 ceiling is palette 0x1d (dark gray), per vgaCeiling[].
+  vctx.fillStyle = "#383838"; // ceiling (0x1d)
   vctx.fillRect(0, 0, VW, VH / 2);
-  const floor = vctx.createLinearGradient(0, VH / 2, 0, VH);
-  floor.addColorStop(0, "#3a342c");
-  floor.addColorStop(1, "#15130f");
-  vctx.fillStyle = floor;
+  vctx.fillStyle = "#717171"; // floor (0x19)
   vctx.fillRect(0, VH / 2, VW, VH / 2);
 
   // walls (one ray per column)
@@ -489,7 +489,8 @@ function renderView(s: State, clock: number, fx: Fx) {
     else drawGuard(px, py, pa, g, clock);
   }
 
-  drawWeapon(clock, fx);
+  if (assets) drawWeaponSprite(clock, fx, assets);
+  else drawWeapon(clock, fx);
 
   // damage flash
   if (clock < fx.damageUntil) {
@@ -509,9 +510,24 @@ function renderView(s: State, clock: number, fx: Fx) {
   }
 }
 
-// player weapon viewmodel: a pistol held in the lower-right, barrel up, viewed
-// from behind (Wolf3D/Doom convention). Tapers bottom→top so it reads as a gun,
-// not a cross. Recoil kicks it up; muzzle flash on fire.
+// real Wolf3D pistol viewmodel: the sprite is drawn scaled to the view height and
+// centered (as Wolf3D's SimpleScaleShape does), so the gun sits bottom-center; the
+// transparent upper part shows the world. Swaps to the fire frames on recoil.
+function drawWeaponSprite(clock: number, fx: Fx, A: Assets) {
+  let idx = PISTOL_READY;
+  if (clock < fx.recoilUntil) {
+    const prog = 1 - (fx.recoilUntil - clock) / 120; // 0→1 across the fire window
+    idx = PISTOL_FIRE[Math.min(PISTOL_FIRE.length - 1, Math.floor(prog * PISTOL_FIRE.length))];
+  }
+  const img = A.sprites.get(idx) ?? A.sprites.get(PISTOL_READY);
+  if (!img) { drawWeapon(clock, fx); return } // frame missing → procedural fallback
+  const h = VH * 1.3, w = h; // square sprite, a touch larger than view height, centered
+  const bob = Math.sin(clock / 350) * (VH * 0.012); // subtle idle sway
+  vctx.drawImage(img, 0, 0, 64, 64, (VW - w) / 2, VH - h + bob, w, h); // bottom-anchored
+}
+
+// procedural weapon viewmodel (fallback when no VSWAP assets): a pistol held in the
+// lower-right, barrel up, viewed from behind. Recoil kicks it up; muzzle flash on fire.
 function drawWeapon(clock: number, fx: Fx) {
   const recoil = clock < fx.recoilUntil ? 20 * ((fx.recoilUntil - clock) / 120) : 0;
   const cx = VW / 2 + 40; // right of center (right hand)
