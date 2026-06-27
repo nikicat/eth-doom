@@ -157,9 +157,17 @@ contract Engine {
     // ---------------- setup ----------------
 
     function _load(address map) internal view returns (World memory wd) {
-        wd.tiles = IMap(map).tiles();
         wd.w = IMap(map).width();
         wd.h = IMap(map).height();
+        // read the tilemap from the Map's SSTORE2 data contract in one EXTCODECOPY
+        // (skip the leading STOP byte) — far cheaper than reloading it from storage.
+        uint256 n = wd.w * wd.h;
+        bytes memory tl = new bytes(n);
+        address p = IMap(map).tilesPtr();
+        assembly {
+            extcodecopy(p, add(tl, 0x20), 1, n)
+        }
+        wd.tiles = tl;
         wd.trig = Trig.table();
         wd.rnd = Rng.table();
     }

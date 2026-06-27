@@ -44,16 +44,19 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | **M3** world completeness | 🟡 | **real WL1 level (E1L1) via `map-extract`** + multiple guards ✅; doors/pickups/other enemy types + `SessionFactory` ⬜ |
 | **M4** MegaETH + UX | ⬜ | deploy to MegaETH; session-key delegation + auto-signing; WASM Wolf3D-port renderer; client prediction |
 
-## Gas (per `submitInput`, packed state, on anvil)
+## Gas (per `submitInput`, packed state + SSTORE2 map, on anvil)
 
 | scenario | what | min | avg | max |
 |---|---|---|---|---|
-| `move_basic` | movement only | 74.4k | 78.8k | 94.4k |
-| `chase_guard` | guard chases + shoots you (151 tics) | 81.0k | 86.2k | 110.9k |
-| `kill_guard` | you fire + kill the guard (81 tics) | 83.9k | 93.6k | 126.3k |
+| `move_basic` | movement only | 57.2k | 61.5k | 77.2k |
+| `chase_guard` | guard chases + shoots you (151 tics) | 63.7k | 69.0k | 93.6k |
+| `kill_guard` | you fire + kill the guard (81 tics) | 66.7k | 76.3k | 109.0k |
 
-`submitInput` gas is the true per-input cost a player pays. ~80–126k/input with a live guard —
-well inside the original ~120–250k estimate, and a fraction of a cent on a cheap L2.
+`submitInput` gas is the true per-input cost a player pays — ~60–110k with a live guard on the
+16×16 test map, a fraction of a cent on a cheap L2. The map is stored **SSTORE2-style** (the tilemap
+is a data contract's bytecode, read each tick with one `EXTCODECOPY`) rather than as a `bytes` in
+storage; on the real 64×64 level this removes ~128 cold `SLOAD`s/tick (~270k gas), dropping a
+12-guard tick from ~490k to ~225k. Cost scales ~linearly with live-actor count (~30–40k/guard).
 
 ## How it's verified
 
@@ -76,8 +79,9 @@ anvil --silent &
 
 ## Next
 
-- **Re-pack opt** is done for the multi-actor state; the obvious remaining gas lever is reading
-  the map via SSTORE2/`CODECOPY` instead of an `IMap.tiles()` staticcall each tic.
-- **M3**: doors + `CheckLine` door logic, pickups, multiple guards (then actor-vs-actor `actorat`
-  collision matters), real WL1 geometry.
+- **Gas**: state re-pack ✅ and SSTORE2 map ✅ are done; the remaining levers are per-actor
+  packing (re-encoding every actor each tick) and capping live-actor count.
+- **M3**: dormant guards + line-of-sight (`T_Stand`/`SightPlayer` — restore the faithful behavior;
+  our port currently spawns guards alerted), doors + `CheckLine` door logic, pickups, other enemy
+  types (dog/SS/officer), actor-vs-actor `actorat` collision, `SessionFactory`.
 - **M4**: MegaETH deploy (plain redeploy), popup-free play via session keys, first-person renderer.

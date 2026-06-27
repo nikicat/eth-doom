@@ -7,6 +7,9 @@ interface IMap {
     function width() external view returns (uint256);
     function height() external view returns (uint256);
     function tiles() external view returns (bytes memory);
+    /// @notice SSTORE2 pointer: the tilemap is the deployed code at this address
+    /// (one STOP byte, then `width*height` tile bytes). Read via EXTCODECOPY from offset 1.
+    function tilesPtr() external view returns (address);
     function spawn() external view returns (uint256 x, uint256 y, uint256 dir);
     /// @notice Guard spawns, 3 bytes each: tilex, tiley, dir.
     function guards() external view returns (bytes memory);
