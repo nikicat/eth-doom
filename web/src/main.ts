@@ -1040,6 +1040,7 @@ let sessionKeyLabel = "—";
 let predictLabel = "off (chain-only)"; // client-side prediction status
 let renderLabel = "ts raycaster"; // wall renderer: wasm vs TS raycaster
 let tps = 0; // confirmed ticks/sec (rolling 1s window)
+const TICK_HZ = 70; // fixed-timestep target — Wolf3D's native time base; we sustain more
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 function renderDbg(s: State, tick: number, gas: number | null) {
@@ -1047,7 +1048,7 @@ function renderDbg(s: State, tick: number, gas: number | null) {
   dbg.textContent =
     `level     ${levelName} ${W}x${H}\n` +
     `tick      ${tick}\n` +
-    `tickrate  ${tps.toFixed(0)} tics/s\n` +
+    `tickrate  ${tps.toFixed(0)} / ${TICK_HZ} tics/s\n` +
     `gas/tick  ${gas != null ? `${(gas / 1000).toFixed(0)}k (${gas.toLocaleString("en-US")})` : "—"}\n` +
     `signer    ${sessionKeyLabel}\n` +
     `predict   ${predictLabel}\n` +
@@ -1215,7 +1216,6 @@ async function main() {
   // we don't await each receipt or re-read state. Every SYNC_EVERY ticks we let the chain
   // catch up and verify the prediction byte-for-byte (resyncing on the should-never-happen
   // mismatch). Chain-only fallback (no predictor) still awaits + reads each tick.
-  const SYNC_EVERY = 60;
   let nonce = await pub.getTransactionCount({ address: burner.address });
   const gasPrice = await pub.getGasPrice();
   const GAS = 600000n; // generous fixed limit (an E1L1 tick is ~245k) — skips estimateGas
@@ -1230,37 +1230,75 @@ async function main() {
   // tx loop never gates the view.
   const MAXINFLIGHT = 24;
   const inflight: Promise<Hex | undefined>[] = [];
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  // predicted-state history (tick -> packed hex). The reconciler compares the chain's
+  // confirmed state to what we predicted AT THAT tick, so it never has to stall the loop
+  // waiting for the chain to catch up to the (ahead) prediction.
+  const predHist = new Map<number, string>();
+  let lastHash: Hex | undefined;
+
+  // reconciler: runs IN PARALLEL with the tick loop (not inline), so verification never
+  // perturbs the cadence. Each second it reads the chain's confirmed tick + state at a
+  // pinned block and checks them against our prediction for that tick; refreshes gas;
+  // resyncs on the (differential-proven-impossible) mismatch.
+  (async function reconcile() {
+    for (;;) {
+      await sleep(1000);
+      if (!predictEnabled) continue;
+      try {
+        const bn = await pub.getBlockNumber();
+        const T = Number(await pub.readContract({ address: session, abi: SessionA.abi, functionName: "tickCount", blockNumber: bn }));
+        const chainHex = ((await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState", blockNumber: bn })) as Hex).toLowerCase();
+        confTick = T;
+        if (lastHash) {
+          const r = await pub.getTransactionReceipt({ hash: lastHash }).catch(() => null);
+          if (r) lastGas = Number(r.gasUsed);
+        }
+        const want = predHist.get(T);
+        if (want === undefined) continue; // outside our history window — skip this round
+        predTotal++;
+        if (want === chainHex) predOk++;
+        else {
+          console.warn(`[predict] reconcile mismatch @ ${T}; falling back to chain`);
+          predictEnabled = false;
+          latest = decode(chainHex as Hex);
+        }
+      } catch (e) { console.warn("[reconcile]", e); }
+    }
+  })();
+
+  // fixed-timestep pacing: pin the world to a stable TICK_HZ instead of free-running
+  // (which ramped 120->145 and jittered with load). The accumulator keeps the average
+  // exact even when setTimeout overshoots; the catch-up cap avoids a spiral after the tab
+  // is backgrounded (throttled timers). Rendering stays at 60fps via rAF, independent.
+  const DT = 1000 / TICK_HZ;
+  let nextAt = performance.now();
 
   for (;;) {
+    const wait = nextAt - performance.now();
+    if (wait > 0) await sleep(wait);
+    nextAt += DT;
+    if (performance.now() - nextAt > 250) nextAt = performance.now(); // stall/background reset
+
     const before = latest!;
     const c = cmd();
 
     if (predictEnabled && predictor) {
       // predict locally (instant render) + submit fire-and-forget into the pipeline
       predictor.step(Number(c.controlx), Number(c.controly), c.buttons);
-      const pred = decode(predictor.read());
+      const predHex = predictor.read();
+      const pred = decode(predHex);
       applyFx(before, pred);
       latest = pred;
       tick++;
-      inflight.push(submit(c));
+      predHist.set(tick, predHex.toLowerCase()); // for the parallel reconciler
+      if (predHist.size > 256) predHist.delete(tick - 256);
+      const p = submit(c);
+      p.then((h) => { if (h) lastHash = h; });
+      inflight.push(p);
       markTick();
       if (inflight.length > MAXINFLIGHT) await inflight.shift(); // bound the window (+ yield)
-
-      // periodic sync: drain the pipeline, let the chain finish, verify it agrees
-      if (tick % SYNC_EVERY === 0) {
-        const hashes = await Promise.all(inflight.splice(0));
-        const last = hashes.filter(Boolean).pop();
-        if (last) lastGas = Number((await pub.waitForTransactionReceipt({ hash: last })).gasUsed);
-        confTick = Number(await pub.readContract({ address: session, abi: SessionA.abi, functionName: "tickCount" }));
-        const chainHex = await getStateHex();
-        predTotal++;
-        if (chainHex.toLowerCase() === predictor.read().toLowerCase()) predOk++;
-        else {
-          console.warn(`[predict] reconcile mismatch @ ${confTick}; falling back to chain`);
-          predictEnabled = false;
-          latest = decode(chainHex);
-        }
-      }
       predictLabel = predictEnabled
         ? `wasm ✓ ${predOk}/${predTotal} syncs · pred ${tick} / conf ${confTick}`
         : `off (diverged @ ${confTick})`;

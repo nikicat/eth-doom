@@ -45,8 +45,10 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   `WL_DRAW.C` wall math + a portable ray cast fill an RGBA framebuffer + per-column depth that the
   client blits, with sprites/gun/HUD drawn in TS on top (falls back to the TS raycaster if unbuilt).
   Because prediction takes the chain read off the hot path, the burner submits **fire-and-forget**
-  (local nonce + fixed gas, a pipelined in-flight window, verified at periodic sync points), pushing
-  the live tickrate to **~120–145 tics/s on anvil** — past Wolf3D's native 35 Hz (shown in the HUD).
+  (local nonce + fixed gas, a pipelined in-flight window) and a **parallel reconciler** verifies the
+  chain against a small predicted-state history without ever stalling the loop. The world runs on a
+  **fixed-timestep loop pinned to a stable 70 tics/s** — Wolf3D's native time base — with anvil
+  sustaining ~145 ticks/s of headroom underneath (the live tickrate is shown in the HUD).
 - **Authentic id art + the real first level, runtime-loaded** — `scripts/fetch-shareware.sh` downloads
   the freely-distributable Wolf3D shareware and the Rust extractors decode it: `wl-extract` does
   **VSWAP** → wall textures + guard sprites + the player pistol and **VGAGRAPH** (Huffman + VGA-planar)
