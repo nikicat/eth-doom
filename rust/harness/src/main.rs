@@ -300,5 +300,81 @@ async fn main() -> Result<()> {
             name, golden.len(), min, sum / n, max
         );
     }
+
+    // --- E1L1 gas probe (no golden): split the full submitInput cost into the
+    // Engine compute (a view eth_call) vs the Session state read/write overhead. ---
+    let lvl_path = repo("web/public/level.json");
+    if lvl_path.exists() {
+        let level: Value = serde_json::from_str(&fs::read_to_string(&lvl_path)?)?;
+        let w = level["w"].as_u64().unwrap();
+        let h = level["h"].as_u64().unwrap();
+        let tiles: Vec<u8> = level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect();
+        let (sx, sy, sdir) = (level["spawn"]["x"].as_u64().unwrap(), level["spawn"]["y"].as_u64().unwrap(), level["spawn"]["dir"].as_u64().unwrap());
+        let triplet = |key: &str, fields: usize| -> Vec<u8> {
+            level[key].as_array().map(|a| a.iter().flat_map(|e| {
+                let r = e.as_array().unwrap();
+                (0..fields).map(|k| r[k].as_u64().unwrap() as u8).collect::<Vec<_>>()
+            }).collect()).unwrap_or_default()
+        };
+        let mut guards = triplet("guards", 4);
+        guards.truncate(12 * 4); // match the client's MAX_GUARDS cap
+        let (doors, items) = (triplet("doors", 3), triplet("items", 3));
+        let (ng, nd, ni) = (guards.len() / 4, doors.len() / 3, items.len() / 3);
+
+        let map = mp::Map::deploy(
+            provider.clone(), U256::from(w), U256::from(h), Bytes::from(tiles),
+            U256::from(sx), U256::from(sy), U256::from(sdir),
+            Bytes::from(guards), Bytes::from(doors), Bytes::from(items),
+        ).await?;
+        let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address()).await?;
+
+        let mut full = Vec::new();
+        let mut compute = Vec::new();
+        for _ in 0..8 {
+            let state = session.getState().call().await?;
+            let cmd_c = eng::Engine::Cmd { controlx: I256::ZERO, controly: I256::try_from(-35).unwrap(), buttons: 0 };
+            // Engine compute only (a view call — no Session storage write):
+            compute.push(engine.tick(state, *map.address(), cmd_c).estimate_gas().await?);
+            // Full per-input cost (the tx the player pays):
+            let cmd_s = sess::Engine::Cmd { controlx: I256::ZERO, controly: I256::try_from(-35).unwrap(), buttons: 0 };
+            full.push(session.submitInput(cmd_s).send().await?.get_receipt().await?.gas_used);
+        }
+        let avg = |v: &[u64]| v.iter().sum::<u64>() / v.len() as u64;
+        let (f, c) = (avg(&full), avg(&compute));
+
+        // attribute the compute: same map/doors/items but ZERO guards, on a freshly
+        // spawned session, isolates the fixed per-tick map-data load from the guard AI.
+        let map0 = mp::Map::deploy(
+            provider.clone(), U256::from(w), U256::from(h),
+            Bytes::from(level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
+            U256::from(sx), U256::from(sy), U256::from(sdir),
+            Bytes::new(), Bytes::from(triplet("doors", 3)), Bytes::from(triplet("items", 3)),
+        ).await?;
+        let s0 = sess::Session::deploy(provider.clone(), *engine.address(), *map0.address()).await?;
+        let st0 = s0.getState().call().await?;
+        let cmd0 = eng::Engine::Cmd { controlx: I256::ZERO, controly: I256::try_from(-35).unwrap(), buttons: 0 };
+        let c0 = engine.tick(st0, *map0.address(), cmd0).estimate_gas().await?;
+
+        // bare map: tilemap only (no guards/doors/items) — isolates the tilemap +
+        // trig/rng load + codec from the per-door/item processing.
+        let mapb = mp::Map::deploy(
+            provider.clone(), U256::from(w), U256::from(h),
+            Bytes::from(level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
+            U256::from(sx), U256::from(sy), U256::from(sdir), Bytes::new(), Bytes::new(), Bytes::new(),
+        ).await?;
+        let sb = sess::Session::deploy(provider.clone(), *engine.address(), *mapb.address()).await?;
+        let stb = sb.getState().call().await?;
+        let cmdb = eng::Engine::Cmd { controlx: I256::ZERO, controly: I256::try_from(-35).unwrap(), buttons: 0 };
+        let cb = engine.tick(stb, *mapb.address(), cmdb).estimate_gas().await?;
+
+        println!(
+            "\nE1L1 gas probe ({ng} guards, {nd} doors, {ni} items):\n  \
+             submitInput   {f}  (the per-input tx the player pays)\n  \
+             engine compute {c}\n    tilemap({w}x{h})+trig/rng+codec  {cb}\n    \
+             {nd} doors + {ni} items load/scan  {}\n    {ng}-guard AI  {}\n  \
+             Session/tx overhead  {}  (21k base tx + state read/write)",
+            c0.saturating_sub(cb), c.saturating_sub(c0), f.saturating_sub(c)
+        );
+    }
     Ok(())
 }

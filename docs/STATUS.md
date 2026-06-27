@@ -74,15 +74,23 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | `kill_officer` | an officer (50 HP, speed ×5, constant reaction) chases, fires, dies (171 tics) | 70.9k | 80.2k | 107.0k |
 
 `submitInput` gas is the true per-input cost a player pays — ~65–125k with a live guard + door + items
-on the 16×16 test map, a fraction of a cent on a cheap L2. Map data is stored **SSTORE2-style** (a data
-contract's bytecode, read each tick with one `EXTCODECOPY`): the tilemap (removing ~128 cold
-`SLOAD`s/tick, ~270k on the 64×64 level) and the door/item lists. The dominant remaining cost is the
-`Session` rewriting its full packed state every tick (≈3–5k/word: a cold `SLOAD` + a warm `SSTORE` per
-32-byte word), so **state size is the gas driver**. Two wins keep it down: doors are **sparse** (only
-the non-closed ones get a word — a closed door is the all-zero default the engine reconstructs), and
-items pack their taken bits into ~one word. A full idle E1L1 tick (12 guards, 22 doors, 48 items) is
-**~324k** (was ~397k before these); each *open* door adds ~5k back. **Next levers:** cap/cull live
-actors (corpses linger) and a tighter actor word.
+on the 16×16 test map, a fraction of a cent on a cheap L2. Map data is stored **SSTORE2-style** (read
+each tick with one `EXTCODECOPY`), doors are **sparse** (only non-closed ones get a state word), and
+items pack into a taken-bitmask. The `rust/harness` E1L1 probe splits the real per-tick cost (it calls
+`engine.tick` as a view to isolate compute from the `Session` write):
+
+```
+E1L1 submitInput  ~248k  =  engine compute ~199k          +  Session/tx overhead ~49k (21k base + state I/O)
+                            ├ tilemap 64x64 + trig/rng + codec  ~51k
+                            ├ 22 doors + 48 items load/scan      ~62k
+                            └ 12-guard AI (CheckLine etc.)       ~86k
+```
+
+The **engine compute dominates** (not the `Session` write — that's only ~28k beyond the base tx).
+The biggest single lever was the per-tick rebuild of the item/door memory **struct arrays**: items
+are now read as raw `Map` bytes + a taken-bitmask (no 48-element struct array, no per-bit pack loops),
+which cut a full E1L1 tick **~329k → ~248k (−25%)**. **Next levers:** give doors the same raw-bytes
+treatment (the `Door[]` build is most of that 62k), and cap/cull live actors.
 
 ## How it's verified
 

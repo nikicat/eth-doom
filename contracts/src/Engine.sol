@@ -140,14 +140,10 @@ contract Engine {
         int256 score; // gamestate.score
     }
 
-    /// @dev WL_ACT1.C bonus static. tilex/tiley/itemnumber are static (from Map);
-    /// `taken` is the per-tick dynamic bit (packed as a bitmask).
-    struct Item {
-        uint256 tilex;
-        uint256 tiley;
-        uint256 itemnumber;
-        uint256 taken;
-    }
+    // Bonus items are NOT a struct array: their static data (3 bytes each: tilex,
+    // tiley, itemnumber) lives in `World.itemData` straight from the Map, and the only
+    // dynamic per-item state is one "taken" bit, held in the `World.itemTaken` bitmask.
+    // (Building a 48-element struct array every tick was the single biggest gas cost.)
 
     /// @dev WL_ACT1.C doorobj_t. tilex/tiley/vertical/lock are static (from Map);
     /// action/ticcount/position are the per-tick dynamic state (packed).
@@ -189,7 +185,9 @@ contract Engine {
         Player p;
         Actor[] actors;
         Door[] doors;
-        Item[] items;
+        bytes itemData; // static: 3 bytes/item (tilex, tiley, itemnumber), from the Map
+        uint256[] itemTaken; // dynamic: bit i = item i taken (ceil(numItems/256) words)
+        uint256 numItems;
         uint256 rndindex;
         bytes tiles;
         uint256 w;
@@ -290,18 +288,11 @@ contract Engine {
             dr.ticcount = 0;
         }
 
-        // bonus items: static fields from the Map (3 bytes each: tilex, tiley,
-        // itemnumber). `taken` defaults false; tick() overwrites from the state.
-        bytes memory it = _readPtr(IMap(map).itemsPtr());
-        uint256 ni = it.length / 3;
-        wd.items = new Item[](ni);
-        for (uint256 i = 0; i < ni; i++) {
-            Item memory item = wd.items[i];
-            item.tilex = uint8(it[i * 3]);
-            item.tiley = uint8(it[i * 3 + 1]);
-            item.itemnumber = uint8(it[i * 3 + 2]);
-            item.taken = 0;
-        }
+        // bonus items: just the raw static bytes from the Map (no struct array) + a
+        // zeroed taken bitmask; tick() overwrites the bitmask from the state.
+        wd.itemData = _readPtr(IMap(map).itemsPtr());
+        wd.numItems = wd.itemData.length / 3;
+        wd.itemTaken = new uint256[](wd.numItems == 0 ? 0 : (wd.numItems + 255) / 256);
     }
 
     /// Copy an SSTORE2 blob out of a data contract via one EXTCODECOPY (the first
@@ -618,12 +609,21 @@ contract Engine {
     }
 
     function _getBonuses(World memory wd) internal pure {
-        for (uint256 i = 0; i < wd.items.length; i++) {
-            Item memory s = wd.items[i];
-            if (s.taken != 0) continue;
-            if (wd.p.tilex == s.tilex && wd.p.tiley == s.tiley) {
-                if (_getBonus(wd, s.itemnumber)) s.taken = 1;
+        for (uint256 i = 0; i < wd.numItems; i++) {
+            uint256 wIdx = i >> 8;
+            uint256 bit = uint256(1) << (i & 0xff);
+            if (wd.itemTaken[wIdx] & bit != 0) continue;
+            uint256 base = i * 3;
+            if (wd.p.tilex == _itemByte(wd, base) && wd.p.tiley == _itemByte(wd, base + 1)) {
+                if (_getBonus(wd, _itemByte(wd, base + 2))) wd.itemTaken[wIdx] |= bit;
             }
+        }
+    }
+
+    function _itemByte(World memory wd, uint256 idx) internal pure returns (uint256 v) {
+        bytes memory d = wd.itemData;
+        assembly {
+            v := byte(0, mload(add(add(d, 0x20), idx)))
         }
     }
 
@@ -1387,7 +1387,7 @@ contract Engine {
 
     function _pack(World memory wd) internal pure returns (bytes memory out) {
         uint256 nd = wd.doors.length;
-        uint256 ni = wd.items.length;
+        uint256 ni = wd.numItems;
         uint256 na = wd.actors.length;
         uint256 iw = ni == 0 ? 0 : (ni + 255) / 256;
         uint256 ad = 0; // active (non-closed) doors — the only ones we store
@@ -1412,12 +1412,7 @@ contract Engine {
             slot++;
         }
         for (uint256 wIdx = 0; wIdx < iw; wIdx++) {
-            uint256 bits;
-            for (uint256 bb = 0; bb < 256; bb++) {
-                uint256 idx = wIdx * 256 + bb;
-                if (idx >= ni) break;
-                if (wd.items[idx].taken != 0) bits |= (uint256(1) << bb);
-            }
+            uint256 bits = wd.itemTaken[wIdx]; // already a bitmask — copy the word straight in
             assembly {
                 mstore(add(add(out, 0x60), mul(add(ad, wIdx), 0x20)), bits)
             }
@@ -1458,11 +1453,7 @@ contract Engine {
             assembly {
                 bits := calldataload(add(b.offset, add(0x40, mul(add(ad, wIdx), 0x20))))
             }
-            for (uint256 bb = 0; bb < 256; bb++) {
-                uint256 idx = wIdx * 256 + bb;
-                if (idx >= ni) break;
-                wd.items[idx].taken = (bits >> bb) & 1;
-            }
+            wd.itemTaken[wIdx] = bits; // copy the taken bitmask word straight back
         }
         wd.actors = new Actor[](na);
         for (uint256 i = 0; i < na; i++) {
