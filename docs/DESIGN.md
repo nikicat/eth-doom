@@ -108,8 +108,12 @@ are deviations from id's *render-coupled* code, not between our two implementati
   *localize sound* — gunfire (`madenoise`) alerts every guard, not just those in connected areas.
   Door-jamb side textures (`|0x40`) and the `actorat` adjacency checks in `CloseDoor`/`DoorClosing`
   (no actor grid) are likewise dropped. Applied identically in the oracle and Solidity.
-- **No `actorat` grid yet.** Guards don't collide with each other (`TryWalk` checks walls only); with
-  many guards in a real level this lets them overlap. Actor-vs-actor collision is still to come.
+- **Actor-vs-actor collision** is modeled by scanning the actor list for a shootable actor on the
+  target tile, rather than id's `actorat` grid — equivalent here because each actor's `(tilex,tiley)`
+  is its grid mark (id's clear-at-start/mark-at-end falls out of reading live positions in actor
+  order) and `TryWalk` only tests tiles adjacent to the mover, never its own. So guards no longer walk
+  through each other. The `actorat`-based straddle checks in `CloseDoor`/`DoorClosing` stay player-only
+  (a closing door can still pinch a guard standing in it — an accepted simplification).
 
 ## Tooling
 

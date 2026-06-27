@@ -39,5 +39,10 @@ run door_use door_room.txt 4 8 1
 "$ORACLE" oracle/maps/item_room.txt vectors/item_pickup.input.txt 2 8 1 13 8 2 \
     > vectors/item_pickup.golden.jsonl
 
+# two_guards: two adjacent guards chase the player; the rear can't walk through the
+# front (actorat occupancy — actor-vs-actor collision).
+"$ORACLE" oracle/maps/test_room.txt vectors/two_guards.input.txt 2 8 1 10 8 2 11 8 2 \
+    > vectors/two_guards.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl

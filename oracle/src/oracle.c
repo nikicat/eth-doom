@@ -100,8 +100,8 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (argc != 6 && argc != 9) {
-        fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir> [gx gy gdir]\n", argv[0]);
+    if (argc < 6 || (argc - 6) % 3 != 0) {
+        fprintf(stderr, "usage: %s <map> <input> <spawnx> <spawny> <spawndir> [gx gy gdir]...\n", argv[0]);
         return 1;
     }
 
@@ -110,8 +110,8 @@ int main(int argc, char **argv)
     InitActors();
     US_InitRndT(0);
     SpawnPlayer(atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
-    if (argc == 9)
-        SpawnGuard(atoi(argv[6]), atoi(argv[7]), atoi(argv[8]));
+    for (int g = 6; g + 2 < argc; g += 3)
+        SpawnGuard(atoi(argv[g]), atoi(argv[g + 1]), atoi(argv[g + 2]));
     emit(tick); /* tic 0: initial state */
 
     f = fopen(argv[2], "r");

@@ -654,7 +654,7 @@ contract Engine {
     }
 
     /// WL_STATE.C CHECKSIDE: wall blocks; a closed/opening door yields its doornum
-    /// (guard waits); an open door (actorat cleared) passes freely.
+    /// (guard waits); an open door passes; a shootable actor on the tile blocks.
     function _checkSide(World memory wd, int256 x, int256 y)
         internal
         pure
@@ -665,12 +665,29 @@ contract Engine {
         if (t != 0) {
             if (t < 128) blocked = true; // solid wall
             else doornum = int256(t & 0x7f); // door (not open)
+        } else if (_shootableActorAt(wd, x, y)) {
+            blocked = true; // another guard occupies the tile
         }
     }
 
-    /// WL_STATE.C CHECKDIAG: any non-passable tile (wall or non-open door) blocks.
+    /// WL_STATE.C CHECKDIAG: a wall, a non-open door, or a shootable actor all block.
     function _checkDiag(World memory wd, int256 x, int256 y) internal pure returns (bool) {
-        return _actorTile(wd, x, y) != 0;
+        if (_actorTile(wd, x, y) != 0) return true;
+        return _shootableActorAt(wd, x, y);
+    }
+
+    /// WL_STATE.C `actorat` occupancy: a tile is blocked if a shootable actor stands on
+    /// it. Scanning actors is equivalent to id's grid — each actor's (tilex,tiley) is its
+    /// mark (cleared-at-start/marked-at-end falls out of reading live positions in actor
+    /// order), and TryWalk only ever checks tiles adjacent to the mover, never its own.
+    function _shootableActorAt(World memory wd, int256 x, int256 y) internal pure returns (bool) {
+        for (uint256 i = 0; i < wd.actors.length; i++) {
+            Actor memory a = wd.actors[i];
+            if (int256(a.tilex) == x && int256(a.tiley) == y && (a.flags & FL_SHOOTABLE) != 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// WL_STATE.C SelectChaseDir
