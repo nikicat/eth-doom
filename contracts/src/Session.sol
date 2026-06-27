@@ -13,20 +13,22 @@ contract Session {
     bytes public state;
     uint256 public tickCount;
 
-    event StateDelta(uint256 indexed tick, bytes state);
+    /// @notice Signal that the world advanced; read the new state via `getState()`.
+    /// (Emitting the full state blob here cost ~8 gas/byte every tick and nothing
+    /// consumes it — the client polls getState(). A lightweight tick signal is enough.)
+    event Advanced(uint256 indexed tick);
 
     constructor(address _engine, address _map) {
         engine = Engine(_engine);
         map = _map;
         state = engine.spawn(_map);
-        emit StateDelta(0, state);
+        emit Advanced(0);
     }
 
     /// @notice Advance the world one tic with this input (1 input = 1 tick).
     function submitInput(Engine.Cmd calldata cmd) external {
-        bytes memory ns = engine.tick(state, map, cmd);
-        state = ns;
-        emit StateDelta(++tickCount, ns);
+        state = engine.tick(state, map, cmd);
+        emit Advanced(++tickCount);
     }
 
     function getState() external view returns (bytes memory) {
