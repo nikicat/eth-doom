@@ -109,13 +109,17 @@ are deviations from id's *render-coupled* code, not between our two implementati
   renderer flips on when the actor is drawn. Headless, there's no renderer, so we process every
   actor every tic (like `FL_VISABLE`, an identical-on-both-sides choice). This is what lets a
   dormant guard run `T_Stand`/`SightPlayer` and wake on line-of-sight without screen activation.
-- **Doors without area connectivity.** Doors are faithful (open/close/slide/auto-close, block until
-  fully open, open on player Use / guard bump, gate LOS via `CheckLine`+`doorposition`) — but id's
-  `areaconnect`/`ConnectAreas` graph and `PlaySoundLocTile` are dropped: the map stays a single area
-  (`areabyplayer` all-true). So a closed door still *blocks* sight (the ray stops at it) but does not
-  *localize sound* — gunfire (`madenoise`) alerts every guard, not just those in connected areas.
-  Door-jamb side textures (`|0x40`) and the `actorat` adjacency checks in `CloseDoor`/`DoorClosing`
-  (no actor grid) are likewise dropped. Applied identically in the oracle and Solidity.
+- **Doors + area connectivity.** Doors are faithful (open/close/slide/auto-close, block until fully
+  open, open on player Use / guard bump, gate LOS via `CheckLine`+`doorposition`), and so is id's
+  **area graph**: each map tile carries an `areanumber` (plane-0 floor code − `AREATILE`), a door joins
+  its two perpendicular neighbours' areas while it isn't fully closed, and `ConnectAreas`/
+  `RecursiveConnect` flood `areabyplayer` from the player's area. So gunfire (`madenoise`) and sight
+  only reach guards in areas reachable from the player through OPEN doors — a closed door localizes
+  sound, exactly like the original (`SightPlayer`/`CheckSight` gate on `areabyplayer`). The Engine
+  rebuilds the connectivity bitmask each tick from the (stateless) door states, so `areanumber`/
+  `areabyplayer` need no extra packed state. Only `PlaySoundLocTile` audio, door-jamb side textures
+  (`|0x40`), and the `actorat` adjacency checks in `CloseDoor`/`DoorClosing` (no actor grid) remain
+  dropped. Applied identically in the oracle and Solidity (differential scenario `area_sound`).
 - **Enemy classes share one state table + AI.** The full E1 roster lives in one flat `gstates[]` graph
   (0–15 guard, 16–37 SS, 38–53 dog, 54–70 officer). Guard/SS/officer reuse `T_Chase`/`T_Shoot`; the dog
   has its own `T_DogChase` (no LOS — rushes via `SelectDodgeDir` and leaps to `T_Bite` at melee range)

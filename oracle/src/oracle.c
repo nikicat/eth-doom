@@ -62,6 +62,8 @@ static void load_map(const char *path)
         if (!fgets(line, sizeof line, f)) { fprintf(stderr, "map too short\n"); exit(1); }
         for (x = 0; x < w; x++) {
             char c = line[x];
+            tilemap[x][y] = 0;                                 /* floor by default */
+            areamap[x][y] = 0;                                 /* area 0 by default */
             if (c == '#')      tilemap[x][y] = 1;              /* wall */
             else if (c == 'D') SpawnDoor(x, y, 1, dr_normal);  /* vertical door */
             else if (c == 'd') SpawnDoor(x, y, 0, dr_normal);  /* horizontal door */
@@ -69,7 +71,8 @@ static void load_map(const char *path)
             else if (c == 'h') SpawnStatic(x, y, bo_firstaid); /* first-aid */
             else if (c == 'k') SpawnStatic(x, y, bo_key1);     /* gold key */
             else if (c == 't') SpawnStatic(x, y, bo_cross);    /* treasure */
-            else               tilemap[x][y] = 0;              /* floor */
+            else if (c >= '0' && c <= '9') areamap[x][y] = c - '0'; /* floor, explicit area */
+            /* else: floor, area 0 ('.', ' ') */
         }
     }
     fclose(f);

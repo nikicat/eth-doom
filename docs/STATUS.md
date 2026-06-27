@@ -18,10 +18,13 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 - **Two-way combat** — the guard shoots the player (`T_Shoot` → `TakeDamage`, health drops); the
   player fires back (`GunAttack` → `DamageActor` → pain → `KillActor` death), with ammo + a fire
   cooldown.
-- **Doors** — sliding doors (`SpawnDoor`/`OperateDoor`/`MoveDoors`/`DoorOpening`/`DoorClosing`): the
-  player opens the one they face with **Use** (`Cmd_Use`), a chasing guard opens a door in its path
-  (`TryWalk` → `OpenDoor`) and waits for it (`T_Chase`), doors auto-close after `OPENTICS`, block
-  movement until fully open, and gate line-of-sight while sliding (`CheckLine` reads `doorposition`).
+- **Doors + area connectivity** — sliding doors (`SpawnDoor`/`OperateDoor`/`MoveDoors`/`DoorOpening`/
+  `DoorClosing`): the player opens the one they face with **Use** (`Cmd_Use`), a chasing guard opens a
+  door in its path (`TryWalk` → `OpenDoor`) and waits for it (`T_Chase`), doors auto-close after
+  `OPENTICS`, block movement until fully open, and gate line-of-sight while sliding (`CheckLine` reads
+  `doorposition`). Sound is **localized by id's area graph** (`ConnectAreas`/`areabyplayer`): gunfire
+  only alerts guards in the player's area + rooms reachable through OPEN doors — a closed door keeps a
+  room's guards asleep, exactly like the original.
 - **Pickups** — bonus items (`SpawnStatic`/`GetBonus`): walk onto a clip/first-aid/key/treasure to
   take it — ammo/health with id's clamps + "skip if full" guards, treasure → score, keys → the keyring
   (a **gold/silver key unlocks its locked door** in `OperateDoor`). Items vanish as they're consumed.
@@ -113,11 +116,11 @@ per-tick **golden vectors**; the Rust harness deploys the contracts on anvil, re
 inputs through `Session.submitInput`, and asserts the decoded state matches the golden vector
 **tic-by-tic** (player pose/health/ammo/keys/score, every guard field, every door's
 position/action/ticcount, every item's taken bit, obclass, and the RNG index — over single-guard,
-multi-guard, SS, dog, and officer scenarios). All ten scenarios pass.
+multi-guard, SS, dog, officer, and area-localization scenarios). All eleven scenarios pass.
 
 The **wasm predictor is held to the same bar**: `oracle/verify_wasm.mjs` replays every golden
 scenario through `web/public/predict.wasm` and asserts its decoded packed state matches the golden
-vectors tic-by-tic (all ten pass, 1580 tics). So the same carved C is differential-verified compiled
+vectors tic-by-tic (all eleven pass). So the same carved C is differential-verified compiled
 two ways — natively (`sim_oracle`, the ground truth) and to wasm (the browser predictor) — and the
 client additionally reconciles each predicted tick against `Session.getState()` live.
 

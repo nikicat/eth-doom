@@ -40,6 +40,7 @@ let spawnTile = { x: 8, y: 8, dir: 1 }; // engine dir: angle = (1-dir)*90 ; 1 = 
 let guardTiles: number[][] = [[12, 8]];
 let doorList: number[][] = []; // [tilex, tiley, vertical|lock<<1] in doornum order
 let itemList: number[][] = []; // [tilex, tiley, itemnumber] bonus items
+let areaMap: number[] = []; // per-tile area number (row-major); empty => single area
 let levelName = "test room";
 
 const isWall = (v: number) => v >= 1 && v < 90; // 1..89 = solid wall texture
@@ -91,6 +92,7 @@ async function loadLevel(): Promise<boolean> {
     levelName = L.name ?? "level";
     doorList = (L.doors as number[][] | undefined) ?? [];
     itemList = (L.items as number[][] | undefined) ?? [];
+    areaMap = (L.areas as number[] | undefined) ?? []; // per-tile area numbers (sound localization)
     guardTiles = (L.guards as number[][])
       .map(([x, y, dir, cls]) => ({ x, y, dir: dir ?? 0, cls: cls ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
       .sort((a, b) => a.d - b.d)
@@ -128,6 +130,11 @@ function itemsHex(): Hex {
   itemList.forEach(([x, y, n], i) => { b[i * 3] = x; b[i * 3 + 1] = y; b[i * 3 + 2] = n; });
   return bytesToHex(b);
 }
+// area-map blob: w*h area bytes (or empty for a single-area level)
+function areasHex(): Hex {
+  if (areaMap.length === 0) return "0x";
+  return bytesToHex(Uint8Array.from(areaMap.map((a) => a & 0xff)));
+}
 // per-doornum open fraction (0 closed .. 1 open), refreshed each frame from state
 const doorOpenFrac = new Float64Array(64);
 
@@ -159,6 +166,9 @@ async function loadPredictor(): Promise<Predictor | null> {
     const mem = E.memory as WebAssembly.Memory;
     // setup: same order as the Map blobs → same doornum / item index / actor order
     E.reset();
+    for (let i = 0; i < areaMap.length; i++) {
+      if (areaMap[i]) E.set_area(i % W, (i / W) | 0, areaMap[i]); // areas before doors (SpawnDoor fixup)
+    }
     for (let i = 0; i < W * H; i++) {
       const v = tiles[i] & 0xff;
       if (v && !(v & 0x80)) E.set_wall(i % W, (i / W) | 0); // wall (door tiles via add_door)
@@ -1145,7 +1155,7 @@ async function main() {
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(),
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
-    guardsHex(), doorsHex(), itemsHex(),
+    guardsHex(), doorsHex(), itemsHex(), areasHex(),
   ]);
   // owner = our dev account (the "main wallet"). It signs exactly once below to
   // delegate a session key; from then on the burner signs every tick.

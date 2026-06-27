@@ -30,6 +30,7 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define MAXDOORS      64              /* a tilemap spot holds doornum in 6 bits */
 #define OPENTICS      300             /* DoorOpen auto-close delay */
 #define AREATILE      107             /* first floor/area tile (map semantics) */
+#define NUMAREAS      37              /* WL_DEF.H: floor tiles AREATILE..AREATILE+36 */
 enum { dr_open, dr_closed, dr_opening, dr_closing };   /* doorobj_t.action */
 enum { dr_normal, dr_lock1, dr_lock2, dr_lock3, dr_lock4, dr_elevator }; /* lock */
 
@@ -168,6 +169,11 @@ extern objtype *player;
 /* Walls: 1..63 = solid, 0 = passable (plane-0 tile semantics). */
 extern unsigned char tilemap[MAPSIZE][MAPSIZE];
 
+/* Per-tile area number (0..NUMAREAS-1), from plane-0 floor codes (tile - AREATILE).
+ * Drives sound localization: gunfire alerts only guards in areas reachable from the
+ * player's area through OPEN doors (WL_ACT1.C areaconnect/ConnectAreas). */
+extern unsigned char areamap[MAPSIZE][MAPSIZE];
+
 extern int controlx, controly;          /* per-tic input (already device-scaled) */
 extern int buttonstate[NUMBUTTONS];
 
@@ -190,6 +196,7 @@ extern unsigned  doorposition[MAXDOORS];   /* leading edge 0=closed..0xffff=open
 extern int       useheld;                  /* buttonheld[bt_use] edge latch */
 
 void InitDoorList(void);
+void ConnectAreas(void);   /* WL_ACT1.C: flood areabyplayer from the player's area */
 void SpawnDoor(int tilex, int tiley, int vertical, int lock);
 void OpenDoor(int door);
 void CloseDoor(int door);

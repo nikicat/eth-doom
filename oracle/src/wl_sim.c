@@ -71,7 +71,9 @@ void SpawnPlayer(int tilex, int tiley, int dir)
     if (player->angle < 0)
         player->angle += ANGLES;
     anglefrac = 0;
+    player->areanumber = areamap[tilex][tiley];
     Thrust(0, 0); /* sets tilex/tiley + movement bookkeeping */
+    ConnectAreas();    /* seed areabyplayer from the player's starting area */
 }
 
 /* WL_AGENT.C TryMove — true if the player's PLAYERSIZE box hits no wall.
@@ -129,7 +131,7 @@ void ClipMove(objtype *ob, long xmove, long ymove)
     ob->y = basey;
 }
 
-/* WL_AGENT.C Thrust — areanumber/exit-tile tail dropped (no effect on snapshot). */
+/* WL_AGENT.C Thrust — exit-tile tail dropped; areanumber kept (drives ConnectAreas). */
 void Thrust(int angle, long speed)
 {
     long xmove, ymove;
@@ -145,6 +147,7 @@ void Thrust(int angle, long speed)
 
     player->tilex = player->x >> TILESHIFT;
     player->tiley = player->y >> TILESHIFT;
+    player->areanumber = areamap[player->tilex][player->tiley];
 }
 
 /* WL_AGENT.C ControlMovement — strafe/turn + forward/back, exactly as id's. */

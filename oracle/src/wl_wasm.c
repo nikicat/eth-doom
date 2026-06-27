@@ -63,11 +63,13 @@ EXPORT void reset(void) {
     attackcount = 0;
     playerdead = 0;
     memset(tilemap, 0, sizeof tilemap);
+    memset(areamap, 0, sizeof areamap);
     InitDoorList();
     InitStaticList();
 }
 
 EXPORT void set_wall(int x, int y) { tilemap[x][y] = 1; }
+EXPORT void set_area(int x, int y, int a) { areamap[x][y] = (unsigned char)a; }
 EXPORT void add_door(int x, int y, int vertical, int lock) { SpawnDoor(x, y, vertical, lock); }
 EXPORT void add_item(int x, int y, int itemnumber) { SpawnStatic(x, y, itemnumber); }
 
@@ -82,7 +84,7 @@ EXPORT void setup_tile(int x, int y, int ch) {
         case 'h': SpawnStatic(x, y, bo_firstaid); break;
         case 'k': SpawnStatic(x, y, bo_key1); break;
         case 't': SpawnStatic(x, y, bo_cross); break;
-        default: break; /* floor */
+        default: if (ch >= '0' && ch <= '9') areamap[x][y] = ch - '0'; break; /* floor / area digit */
     }
 }
 

@@ -20,7 +20,27 @@ int      ammo = STARTAMMO;
 int      attackcount;    /* fire cooldown */
 int      madenoise;      /* player fired this tic (alerts guards in the area) */
 
-static unsigned char areabyplayer[64];   /* single-area map: all reachable */
+/* WL_ACT1.C area connectivity. areamap = per-tile area; areaconnect[a][b] counts the
+ * non-closed doors joining areas a and b; areabyplayer[a] = a reachable from the player's
+ * area through open doors. Gunfire (madenoise) only alerts guards where areabyplayer is set. */
+unsigned char areamap[MAPSIZE][MAPSIZE];
+static unsigned char areaconnect[NUMAREAS][NUMAREAS];
+static unsigned char areabyplayer[NUMAREAS];
+
+void RecursiveConnect(int area) {
+    int i;
+    for (i = 0; i < NUMAREAS; i++)
+        if (areaconnect[area][i] && !areabyplayer[i]) {
+            areabyplayer[i] = 1;
+            RecursiveConnect(i);
+        }
+}
+
+void ConnectAreas(void) {
+    memset(areabyplayer, 0, sizeof areabyplayer);
+    areabyplayer[player->areanumber] = 1;
+    RecursiveConnect(player->areanumber);
+}
 
 /* WL_ACT1.C door globals. doorposition: leading edge 0=closed..0xffff=open. */
 doorobj_t doorobjlist[MAXDOORS];
@@ -201,7 +221,7 @@ static int TryWalk(objtype *ob) {
         ob->distance = -doornum - 1;
         return 1;
     }
-    ob->areanumber = 0;             /* single-area map */
+    ob->areanumber = areamap[ob->tilex][ob->tiley]; /* WL_STATE.C: area of the new tile */
     ob->distance = TILEGLOBAL;
     return 1;
 }
@@ -354,6 +374,8 @@ void InitDoorList(void) {
     doornum = 0;
     useheld = 0;
     memset(doorposition, 0, sizeof doorposition);
+    memset(areaconnect, 0, sizeof areaconnect);
+    memset(areabyplayer, 0, sizeof areabyplayer);
     for (i = 0; i < MAXDOORS; i++) doorobjlist[i].action = dr_closed;
 }
 
@@ -367,7 +389,17 @@ void SpawnDoor(int tilex, int tiley, int vertical, int lock) {
     doorobjlist[doornum].ticcount = 0;
     tilemap[tilex][tiley] = doornum | 0x80;     /* a special "door" tile */
     actorat[tilex][tiley] = (void *)(uintptr_t)(doornum | 0x80); /* solid wall */
+    /* WL_ACT1.C: give the door tile a side neighbor's area number (*map = *(map-1)) */
+    if (vertical) areamap[tilex][tiley] = areamap[tilex - 1][tiley];
+    else          areamap[tilex][tiley] = areamap[tilex][tiley - 1];
     doornum++;
+}
+
+/* The two areas a door joins — its perpendicular neighbors' area numbers (WL_ACT1.C). */
+static void DoorAreas(int door, int *a1, int *a2) {
+    int tx = doorobjlist[door].tilex, ty = doorobjlist[door].tiley;
+    if (doorobjlist[door].vertical) { *a1 = areamap[tx + 1][ty]; *a2 = areamap[tx - 1][ty]; }
+    else                            { *a1 = areamap[tx][ty - 1]; *a2 = areamap[tx][ty + 1]; }
 }
 
 void OpenDoor(int door) {
@@ -426,7 +458,13 @@ static void DoorOpen(int door) {
 
 static void DoorOpening(int door) {
     long position = doorposition[door];
-    /* (first-crack area connect + open sound dropped) */
+    if (!position) {                            /* just starting to open: connect the areas */
+        int a1, a2;
+        DoorAreas(door, &a1, &a2);
+        areaconnect[a1][a2]++;
+        areaconnect[a2][a1]++;
+        ConnectAreas();
+    }
     position += tics << 10;                      /* slide open an adaptive amount */
     if (position >= 0xffff) {
         position = 0xffff;
@@ -450,8 +488,13 @@ static void DoorClosing(int door) {
     position = doorposition[door];
     position -= tics << 10;
     if (position <= 0) {
+        int a1, a2;
         position = 0;
-        doorobjlist[door].action = dr_closed;   /* (area disconnect dropped) */
+        doorobjlist[door].action = dr_closed;
+        DoorAreas(door, &a1, &a2);              /* fully closed: disconnect the areas */
+        areaconnect[a1][a2]--;
+        areaconnect[a2][a1]--;
+        ConnectAreas();
         doorobjlist[door].ticcount = 0;         /* normalize: a closed door is all-zero
                                                  * dynamic state (lets the packed state drop
                                                  * it). ticcount is never read while closed
@@ -933,7 +976,7 @@ void InitActors(void) {
         for (y = 0; y < MAPSIZE; y++)
             if (tilemap[x][y])
                 actorat[x][y] = (void *)(uintptr_t)tilemap[x][y];
-    for (i = 0; i < 64; i++) areabyplayer[i] = 1;
+    (void)i;
 }
 
 /* WL_ACT2.C SpawnStand(which): spawn a dormant guard or SS, standing and facing a
@@ -949,7 +992,7 @@ void SpawnEnemy(int which, int tilex, int tiley, int dir) {
     ob->tiley = tiley;
     ob->x = ((long)tilex << TILESHIFT) + TILEGLOBAL / 2;
     ob->y = ((long)tiley << TILESHIFT) + TILEGLOBAL / 2;
-    ob->areanumber = 0;
+    ob->areanumber = areamap[tilex][tiley];   /* area of the spawn tile */
     actorat[tilex][tiley] = ob;
 
     ob->dir = (dir & 3) * 2;          /* 4-way 0..3 -> dirtype east/north/west/south */

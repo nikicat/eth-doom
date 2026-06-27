@@ -20,6 +20,7 @@ contract Engine {
     int256 internal constant MINSIGHT = 0x18000; // CheckSight auto-see radius
     int256 internal constant PLAYERSIZE = MINDIST;
     int256 internal constant MINACTORDIST = 0x10000;
+    uint256 internal constant NUMAREAS = 37; // WL_DEF.H floor tiles AREATILE..AREATILE+36
     int256 internal constant ANGLES = 360;
     int256 internal constant MOVESCALE = 150;
     int256 internal constant BACKMOVESCALE = 100;
@@ -198,6 +199,9 @@ contract Engine {
         int256 pluy;
         int256 thrustspeed;
         bool madenoise; // player fired this tic (alerts guards in the area)
+        bytes areas; // per-tile area number (from the Map; empty => all area 0)
+        uint256 playerArea; // area of the player's tile (root of the connectivity flood)
+        uint256 areabyplayer; // bitmask: bit a set => area a reachable from playerArea via open doors
     }
 
     // ---------------- public API ----------------
@@ -236,6 +240,10 @@ contract Engine {
     {
         World memory wd = _load(map);
         _unpack(state, wd); // fills p, doors (dynamic), actors, rndindex
+
+        // seed area connectivity from the loaded state (player area + non-closed doors)
+        wd.playerArea = _area(wd, wd.p.tilex, wd.p.tiley);
+        _connectAreas(wd);
 
         // WL_PLAY.C PlayLoop order: MoveDoors, then the player's T_Player
         // (ControlMovement + Cmd_Use + weapon), then every actor's DoActor.
@@ -293,6 +301,20 @@ contract Engine {
         wd.itemData = _readPtr(IMap(map).itemsPtr());
         wd.numItems = wd.itemData.length / 3;
         wd.itemTaken = new uint256[](wd.numItems == 0 ? 0 : (wd.numItems + 255) / 256);
+
+        // per-tile area map (WL_ACT1.C). Empty => single area 0. Apply SpawnDoor's
+        // fixup: a door tile takes a side neighbor's area (`*map = *(map-1)`), so an
+        // actor standing in an open doorway gets the right area.
+        wd.areas = _readPtr(IMap(map).areasPtr());
+        if (wd.areas.length != 0) {
+            for (uint256 i = 0; i < nd; i++) {
+                Door memory dr = wd.doors[i];
+                uint256 idx = dr.tiley * wd.w + dr.tilex;
+                wd.areas[idx] = dr.vertical != 0
+                    ? wd.areas[dr.tiley * wd.w + (dr.tilex - 1)]
+                    : wd.areas[(dr.tiley - 1) * wd.w + dr.tilex];
+            }
+        }
     }
 
     /// Copy an SSTORE2 blob out of a data contract via one EXTCODECOPY (the first
@@ -386,6 +408,7 @@ contract Engine {
         _clipMovePlayer(wd, xmove, ymove);
         wd.p.tilex = uint256(wd.p.x >> 16);
         wd.p.tiley = uint256(wd.p.y >> 16);
+        wd.playerArea = _area(wd, wd.p.tilex, wd.p.tiley); // WL_AGENT.C Thrust area update
     }
 
     function _clipMovePlayer(World memory wd, int256 xmove, int256 ymove) internal pure {
@@ -431,11 +454,59 @@ contract Engine {
         return v;
     }
 
+    // ---------------- area connectivity (WL_ACT1.C) ----------------
+    // gunfire (madenoise) and sight only reach guards in areas connected to the
+    // player's area through OPEN doors. areabyplayer is recomputed whenever
+    // connectivity changes (a door starts opening / finishes closing) and at load.
+
+    /// area number of a tile (0 if the Map carries no area map).
+    function _area(World memory wd, uint256 tilex, uint256 tiley) internal pure returns (uint256) {
+        if (wd.areas.length == 0) return 0;
+        return uint8(wd.areas[tiley * wd.w + tilex]);
+    }
+
+    /// Rebuild area adjacency from the non-closed doors (each joins its two
+    /// perpendicular neighbours' areas), then flood from the player's area into the
+    /// areabyplayer bitmask. Equivalent to id's incremental areaconnect++/-- since a
+    /// door contributes exactly while it isn't fully closed.
+    function _connectAreas(World memory wd) internal pure {
+        if (wd.areas.length == 0) { wd.areabyplayer = type(uint256).max; return; } // single area
+        uint256[] memory conn = new uint256[](NUMAREAS);
+        for (uint256 i = 0; i < wd.doors.length; i++) {
+            Door memory dr = wd.doors[i];
+            if (dr.action == DR_CLOSED) continue;
+            uint256 a1;
+            uint256 a2;
+            if (dr.vertical != 0) {
+                a1 = _area(wd, dr.tilex + 1, dr.tiley);
+                a2 = _area(wd, dr.tilex - 1, dr.tiley);
+            } else {
+                a1 = _area(wd, dr.tilex, dr.tiley - 1);
+                a2 = _area(wd, dr.tilex, dr.tiley + 1);
+            }
+            conn[a1] |= (uint256(1) << a2);
+            conn[a2] |= (uint256(1) << a1);
+        }
+        uint256 reached = uint256(1) << wd.playerArea;
+        for (uint256 iter = 0; iter < NUMAREAS; iter++) {
+            uint256 next = reached;
+            for (uint256 a = 0; a < NUMAREAS; a++) {
+                if ((reached & (uint256(1) << a)) != 0) next |= conn[a];
+            }
+            if (next == reached) break;
+            reached = next;
+        }
+        wd.areabyplayer = reached;
+    }
+
+    /// true if the actor's area is reachable from the player's area (the sound/sight gate).
+    function _inPlayerArea(World memory wd, Actor memory a) internal pure returns (bool) {
+        return (wd.areabyplayer & (uint256(1) << _area(wd, a.tilex, a.tiley))) != 0;
+    }
+
     // ---------------- doors (WL_ACT1.C / WL_AGENT.C) ----------------
-    // Area connectivity (areaconnect/ConnectAreas) and audio are dropped: the
-    // single-area map keeps every area connected, so doors block, slide, gate LOS
-    // (via _losHit + position), auto-close, and open on bump/use — but cross-door
-    // sound localization is lost (madenoise reaches every guard).
+    // Doors block, slide, gate LOS (via _losHit + position), auto-close, and open on
+    // bump/use; opening/closing also reconnects/disconnects areas (_connectAreas).
 
     function _moveDoors(World memory wd) internal pure {
         for (uint256 i = 0; i < wd.doors.length; i++) {
@@ -488,6 +559,7 @@ contract Engine {
 
     function _doorOpening(World memory wd, uint256 d) internal pure {
         int256 position = wd.doors[d].position;
+        if (position == 0) _connectAreas(wd); // just starting to open: connect the areas
         position += TICS << 10; // slide open an adaptive amount
         if (position >= 0xffff) {
             position = 0xffff;
@@ -509,6 +581,7 @@ contract Engine {
             position = 0;
             door.action = DR_CLOSED;
             door.ticcount = 0; // normalize a closed door to all-zero (see oracle note)
+            _connectAreas(wd); // fully closed: disconnect the areas
         }
         door.position = position;
     }
@@ -867,18 +940,18 @@ contract Engine {
     function _moveObj(World memory wd, Actor memory a, int256 move) internal pure {
         _stepDir(a, a.dir, move);
 
-        int256 deltax = a.x - wd.p.x;
-        if (deltax < -MINACTORDIST || deltax > MINACTORDIST) {
-            a.distance -= move;
-            return;
+        // WL_STATE.C MoveObj: only block on the player when in the player's area
+        if (_inPlayerArea(wd, a)) {
+            int256 deltax = a.x - wd.p.x;
+            if (deltax >= -MINACTORDIST && deltax <= MINACTORDIST) {
+                int256 deltay = a.y - wd.p.y;
+                if (deltay >= -MINACTORDIST && deltay <= MINACTORDIST) {
+                    _stepDir(a, a.dir, -move); // too close to player — back up
+                    return;
+                }
+            }
         }
-        int256 deltay = a.y - wd.p.y;
-        if (deltay < -MINACTORDIST || deltay > MINACTORDIST) {
-            a.distance -= move;
-            return;
-        }
-        // too close to player — back up
-        _stepDir(a, a.dir, -move);
+        a.distance -= move;
     }
 
     function _stepDir(Actor memory a, int256 dir, int256 move) internal pure {
@@ -1150,6 +1223,7 @@ contract Engine {
 
     /// WL_STATE.C CheckSight: area connected + auto-see-if-close + facing FOV + LOS.
     function _checkSight(World memory wd, Actor memory a) internal pure returns (bool) {
+        if (!_inPlayerArea(wd, a)) return false; // WL_STATE.C: not in the player's area
         int256 deltax = wd.p.x - a.x;
         int256 deltay = wd.p.y - a.y;
         if (deltax > -MINSIGHT && deltax < MINSIGHT && deltay > -MINSIGHT && deltay < MINSIGHT)
@@ -1190,6 +1264,7 @@ contract Engine {
             if (a.temp2 > 0) return;
             a.temp2 = 0; // time to react
         } else {
+            if (!_inPlayerArea(wd, a)) return; // WL_STATE.C: can't hear/see across closed areas
             if ((a.flags & FL_AMBUSH) != 0) {
                 if (!_checkSight(wd, a)) return;
                 a.flags &= ~FL_AMBUSH;

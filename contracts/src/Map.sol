@@ -17,6 +17,7 @@ contract Map is IMap {
     address private immutable _tilesPtr; // data contract: STOP byte + w*h tile bytes
     address private immutable _doorsPtr; // STOP byte + 3 bytes/door (read each tick)
     address private immutable _itemsPtr; // STOP byte + 3 bytes/item (read each tick)
+    address private immutable _areasPtr; // STOP byte + w*h area bytes (or just STOP if none)
     bytes private _guards;
 
     constructor(
@@ -28,12 +29,14 @@ contract Map is IMap {
         uint256 sdir,
         bytes memory g,
         bytes memory d,
-        bytes memory it
+        bytes memory it,
+        bytes memory ar
     ) {
         require(t.length == w * h, "bad tiles length");
         require(g.length % 4 == 0, "bad guards length"); // tilex,tiley,dir,class
         require(d.length % 3 == 0, "bad doors length");
         require(it.length % 3 == 0, "bad items length");
+        require(ar.length == 0 || ar.length == w * h, "bad areas length");
         width = w;
         height = h;
         _spawnX = sx;
@@ -42,6 +45,7 @@ contract Map is IMap {
         _tilesPtr = _sstore2(t);
         _doorsPtr = _sstore2(d); // SSTORE2: doors/items are read every tick, like tiles
         _itemsPtr = _sstore2(it);
+        _areasPtr = _sstore2(ar); // empty => engine treats the whole level as one area
         _guards = g;
     }
 
@@ -67,6 +71,10 @@ contract Map is IMap {
 
     function itemsPtr() external view returns (address) {
         return _itemsPtr;
+    }
+
+    function areasPtr() external view returns (address) {
+        return _areasPtr;
     }
 
     /// Copy an SSTORE2 blob out of a data contract (skip the leading STOP byte).

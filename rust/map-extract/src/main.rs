@@ -270,6 +270,11 @@ fn main() -> Result<()> {
     let doors_flat = flat(&doors.iter().map(|d| d.to_vec()).collect::<Vec<_>>());
     let items_flat = flat(&items.iter().map(|i| i.to_vec()).collect::<Vec<_>>());
 
+    // per-tile area number for sound localization: plane-0 floor codes >= AREATILE encode
+    // the area (tile - AREATILE); walls/doors get 0 (the engine fixes up door tiles).
+    const AREATILE: u16 = 107;
+    let areas: Vec<u8> = plane0.iter().map(|&t| if t >= AREATILE { (t - AREATILE) as u8 } else { 0 }).collect();
+
     let level = serde_json::json!({
         "name": name,
         "w": w, "h": h,
@@ -278,11 +283,13 @@ fn main() -> Result<()> {
         "guards": guards,           // [tilex, tiley, dir, class] per enemy (0 guard, 2 SS, 1/3 -> guard)
         "doors": doors,             // [tilex, tiley, vertical|lock<<1] per door, in doornum order
         "items": items,             // [tilex, tiley, itemnumber] per bonus item
-        // flat-bytes mirror of the four arrays above, for script/Deploy.s.sol:
+        "areas": areas,             // per-tile area number (sound localization via ConnectAreas)
+        // flat-bytes mirror of the arrays above, for script/Deploy.s.sol:
         "tilesHex": to_hex(&tiles),
         "guardsHex": to_hex(&guards_flat),
         "doorsHex": to_hex(&doors_flat),
         "itemsHex": to_hex(&items_flat),
+        "areasHex": to_hex(&areas),
     });
     if let Some(dir) = args.out.parent() {
         fs::create_dir_all(dir)?;

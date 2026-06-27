@@ -56,5 +56,11 @@ run door_use door_room.txt 4 8 1
 "$ORACLE" oracle/maps/test_room.txt vectors/kill_officer.input.txt 4 8 1 12 8 2 1 \
     > vectors/kill_officer.golden.jsonl
 
+# area_sound: a guard at (12,3) in area 1, player in area 0, one door between. Firing with
+# the door CLOSED must NOT wake the guard (areas disconnected); opening the door connects
+# the areas and the guard then hears the gunfire and wakes (area connectivity).
+"$ORACLE" oracle/maps/area_room.txt vectors/area_sound.input.txt 4 8 1 12 3 2 0 \
+    > vectors/area_sound.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl

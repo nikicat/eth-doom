@@ -22,4 +22,8 @@ interface IMap {
     /// read each tick via EXTCODECOPY from offset 1. extcodesize-1 gives the length.
     function doorsPtr() external view returns (address);
     function itemsPtr() external view returns (address);
+    /// @notice SSTORE2 pointer for the per-tile area map (STOP byte + width*height area
+    /// bytes), or address(0)/empty when the level is a single area. Drives sound
+    /// localization: gunfire only alerts guards in areas connected to the player's.
+    function areasPtr() external view returns (address);
 }

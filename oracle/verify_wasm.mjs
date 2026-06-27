@@ -23,6 +23,7 @@ const SCENARIOS = [
   { name: "kill_ss",      map: "test_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[2, 12, 8, 2]] },
   { name: "dog_bite",     map: "test_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[3, 12, 8, 2]] },
   { name: "kill_officer", map: "test_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[1, 12, 8, 2]] },
+  { name: "area_sound", map: "area_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[0, 12, 3, 2]] },
 ];
 
 const DR_CLOSED = 1;
