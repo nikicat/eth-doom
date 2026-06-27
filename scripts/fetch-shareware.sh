@@ -132,7 +132,14 @@ PY
 if [ "$DO_EXTRACT" = 1 ]; then
   if command -v cargo >/dev/null; then
     echo "running wl-extract -> $WOLF_OUT"
-    cargo run -q -p wl-extract --manifest-path "$ROOT/rust/Cargo.toml" -- --vswap "$vswap" --out "$WOLF_OUT"
+    # also pass VGAGRAPH (HUD: status bar, BJ face, digit font) when present
+    vga=()
+    for f in vgadict vgahead vgagraph; do
+      p="$OUT/$(echo "$f" | tr '[:lower:]' '[:upper:]').${ext:-WL1}"
+      [ -f "$p" ] && vga+=("--$f" "$p")
+    done
+    cargo run -q -p wl-extract --manifest-path "$ROOT/rust/Cargo.toml" -- \
+      --vswap "$vswap" --out "$WOLF_OUT" ${vga[@]+"${vga[@]}"}
     echo "done — reload the web client; the HUD should read  art: real id (VSWAP)"
   else
     echo "cargo not found; skipping extraction. Run it yourself:" >&2

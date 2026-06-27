@@ -21,11 +21,13 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   (DDA adapted from 3DSage's MIT raycaster), guards as depth-buffered sprite columns, a pistol
   viewmodel + muzzle/damage flashes, a Wolfenstein-style HUD (health/ammo/face + live gas/input),
   and a minimap. WASD/arrows move, Shift strafes, Space fires. No game logic client-side.
-- **Authentic id art, runtime-loaded** — `rust/wl-extract` decodes a user-provided Wolf3D shareware
-  `VSWAP.WL1` into wall textures + guard sprite frames (PNGs) the client loads at runtime to texture
-  the walls and billboard real guards (via Wolf3D's `CalcRotate`). **No id art is committed**; the
-  client falls back to procedural art when no data is present. (Pipeline verified end-to-end against
-  a synthetic VSWAP; the format/palette come from id's GPL source in `reference/`.)
+- **Authentic id art, runtime-loaded** — `scripts/fetch-shareware.sh` downloads the freely-
+  distributable Wolf3D shareware and `rust/wl-extract` decodes it: **VSWAP** → wall textures + guard
+  sprites + the player pistol; **VGAGRAPH** (Huffman + VGA-planar) → the **HUD** (status bar, BJ face,
+  digit font). The client then renders real textured walls, billboarded guards (frame by `state`+`dir`
+  via `CalcRotate`), the real pistol, Wolf3D's flat floor/ceiling colors, and the authentic status bar
+  with the health-driven BJ face. **No id art is committed**; the client falls back to procedural art
+  when no data is present. Every format/palette/chunk-number comes from id's GPL source in `reference/`.
 
 ## Milestones
 

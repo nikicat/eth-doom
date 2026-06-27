@@ -231,8 +231,16 @@ const WALL_TEX = 0; // wall page used for our 0/1 map (0 = dark face, 1 = light 
 // empirically: 425 ready, 426 the muzzle-flash fire frame, 427/428 recoil).
 const PISTOL_READY = 425;
 const PISTOL_FIRE = [426, 427, 428];
-type Assets = { wall: HTMLCanvasElement; wallLit: HTMLCanvasElement; sprites: Map<number, HTMLCanvasElement> };
+type Assets = {
+  wall: HTMLCanvasElement;
+  wallLit: HTMLCanvasElement;
+  sprites: Map<number, HTMLCanvasElement>;
+  pics: Map<number, HTMLCanvasElement>; // VGAGRAPH HUD pics (status bar, digits, faces)
+};
 let assets: Assets | null = null;
+// VGAGRAPH pic indices (this shareware's set): status bar 92, white digits 105–114
+// (N_0PIC…N_9PIC), BJ faces 115–138 (FACE1APIC + 3·level + look).
+const PIC_STATUSBAR = 92, PIC_DIGIT0 = 105, PIC_FACE1A = 115;
 
 const tmp = document.createElement("canvas");
 tmp.width = tmp.height = 64;
@@ -248,6 +256,24 @@ function loadImg64(url: string): Promise<HTMLCanvasElement | null> {
       const cx = c.getContext("2d")!;
       cx.imageSmoothingEnabled = false;
       cx.drawImage(img, 0, 0, 64, 64);
+      res(c);
+    };
+    img.onerror = () => res(null);
+    img.src = url;
+  });
+}
+
+// load a pic at its native dimensions (VGAGRAPH pics vary in size)
+function loadImgRaw(url: string): Promise<HTMLCanvasElement | null> {
+  return new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const cx = c.getContext("2d")!;
+      cx.imageSmoothingEnabled = false;
+      cx.drawImage(img, 0, 0);
       res(c);
     };
     img.onerror = () => res(null);
@@ -276,7 +302,16 @@ async function loadAssets(): Promise<Assets | null> {
     const c = await loadImg64(`/wolf/sprite_${p3(i)}.png`);
     if (c) sprites.set(i, c);
   }
-  return { wall, wallLit, sprites };
+  // HUD pics: status bar + digits (105–114) + BJ faces (115–138)
+  const pics = new Map<number, HTMLCanvasElement>();
+  const picIds = [PIC_STATUSBAR];
+  for (let i = PIC_DIGIT0; i <= 114; i++) picIds.push(i);
+  for (let i = PIC_FACE1A; i <= 138; i++) picIds.push(i);
+  for (const i of picIds) {
+    const c = await loadImgRaw(`/wolf/pic_${p3(i)}.png`);
+    if (c) pics.set(i, c);
+  }
+  return { wall, wallLit, sprites, pics };
 }
 
 // our guard `state`+`dir` → Wolf3D sprite index (enum order; SPR_GRD_S_1 = 50).
@@ -624,6 +659,39 @@ function renderHud(s: State, gas: number | null, clock: number, fx: Fx) {
   cell(450, 190, "GAS / INPUT", gas != null ? (gas / 1000).toFixed(1) + "k" : "—", "#6cf");
 }
 
+// authentic Wolf3D status bar: the real STATUSBARPIC + white digit font + the BJ
+// face (chosen by health). Wolf3D's StatusDrawPic(x,y,pic) places x in 8px tiles,
+// y in pixels from the bar top; LatchNumber right-aligns digits in a field. 2x scale.
+function renderHudReal(s: State, A: Assets, clock: number) {
+  const S = 2; // 320x40 bar → 640x80 canvas
+  hctx.imageSmoothingEnabled = false;
+  hctx.clearRect(0, 0, hudC.width, hudC.height);
+  hctx.drawImage(A.pics.get(PIC_STATUSBAR)!, 0, 0, 320, 40, 0, 0, 320 * S, 40 * S);
+
+  const num = (value: number, xTile: number, width: number) => {
+    const str = Math.max(0, Math.floor(value)).toString();
+    const shown = str.length <= width ? str : str.slice(str.length - width);
+    let x = xTile + (width - shown.length); // right-align (leading blanks show bar bg)
+    for (const ch of shown) {
+      const d = A.pics.get(PIC_DIGIT0 + (ch.charCodeAt(0) - 48));
+      if (d) hctx.drawImage(d, 0, 0, 8, 16, x * 8 * S, 16 * S, 8 * S, 16 * S);
+      x++;
+    }
+  };
+  num(1, 2, 2);                              // LEVEL  (floor 1)
+  num(tick, 6, 6);                           // SCORE  (inputs submitted on-chain)
+  num(1, 14, 1);                             // LIVES
+  num(s.player.health, 21, 3);               // HEALTH
+  num(s.player.ammo, 27, 2);                 // AMMO
+
+  // BJ face: FACE1APIC + 3*level + look; level by health, FACE8 (level 7) when dead
+  const hp = s.player.health;
+  const level = hp <= 0 ? 7 : Math.min(6, Math.floor((100 - hp) / 16));
+  const look = hp <= 0 ? 0 : Math.floor(clock / 600) % 3;
+  const face = A.pics.get(PIC_FACE1A + level * 3 + look) ?? A.pics.get(PIC_FACE1A);
+  if (face) hctx.drawImage(face, 0, 0, 24, 32, 17 * 8 * S, 4 * S, 24 * S, 32 * S);
+}
+
 // ---------------------------------------------------------------------------
 // minimap (top-down)
 // ---------------------------------------------------------------------------
@@ -736,7 +804,8 @@ async function main() {
     const clock = performance.now();
     if (latest) {
       renderView(latest, clock, fx);
-      renderHud(latest, lastGas, clock, fx);
+      if (assets?.pics.get(PIC_STATUSBAR)) renderHudReal(latest, assets, clock);
+      else renderHud(latest, lastGas, clock, fx);
       renderMap(latest);
       renderDbg(latest, tick, lastGas);
     }

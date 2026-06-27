@@ -57,12 +57,19 @@ cargo run -p wl-extract -- --vswap /path/to/VSWAP.WL1 --out web/public/wolf   # 
 > `.WL6` data is commercial and not redistributable — if you own it, pass it via `--zip` (the
 > extractor reads `VSWAP.WL6` identically), but the script won't fetch it.
 
-`wl-extract` decodes VSWAP's 64×64 column-major wall textures and its compshape (RLE) sprite frames
-to PNGs under `web/public/wolf/` (which the client lazy-loads at runtime). **No id Software art is
-committed** — that directory is `.gitignore`d, and the extractor reads only *your* data file. The
-VSWAP layout, the sprite post format, and the game palette were taken from id's GPL source in
-`reference/wolf3d` (`ID_PM.C`, `OLDSCALE.C`, `GAMEPAL`). Wall page `0`/`1` texture our 0/1 map;
-guard sprite frames are picked by the guard's `state` + `dir` via Wolf3D's `CalcRotate`.
+`wl-extract` decodes, to PNGs under `web/public/wolf/` (which the client lazy-loads at runtime):
+- **VSWAP** → 64×64 column-major **wall textures** + compshape (RLE) **sprite frames** (guard, the
+  player **pistol** viewmodel);
+- **VGAGRAPH** (Huffman-compressed, VGA-planar) → the **HUD** pics: the status bar, the white digit
+  font, and the animated **BJ face**.
+
+The client then textures the walls (page 0/1), billboards real guards (frame by `state`+`dir` via
+Wolf3D's `CalcRotate`), draws the real pistol, and composites the authentic status bar — with the
+BJ face chosen by health and digits drawn in the HUD slots (LEVEL/SCORE/LIVES/HEALTH/AMMO). Floor and
+ceiling use Wolf3D's flat colors (`0x19`/`0x1d`). **No id Software art is committed** — that directory
+is `.gitignore`d, and the extractor reads only *your* data file. Every format (VSWAP page table,
+compshape posts, the palette, the Huffman/planar VGAGRAPH layout, and all chunk numbers) comes from
+id's GPL source in `reference/wolf3d`.
 
 > Decoder note: `src/main.ts` unpacks the same bit layout as `Engine.sol`'s `_pack`
 > (header · player word · one word per actor). Keep them in sync.

@@ -18,6 +18,7 @@
 //!   pages [sound_start, chunks_in_file): digitized sounds (ignored)
 
 mod palette;
+mod vga;
 use palette::PALETTE;
 
 use std::fs;
@@ -37,6 +38,16 @@ struct Args {
     /// Output directory (served by the web client; .gitignored).
     #[arg(long, default_value = "web/public/wolf")]
     out: PathBuf,
+    /// VGAGRAPH trio (HUD/menu graphics). If all three are given, also dump pics.
+    #[arg(long)]
+    vgadict: Option<PathBuf>,
+    #[arg(long)]
+    vgahead: Option<PathBuf>,
+    #[arg(long)]
+    vgagraph: Option<PathBuf>,
+    /// chunk index where pics begin (STARTPICS; 3 for WL1).
+    #[arg(long, default_value_t = 3)]
+    start_pics: usize,
 }
 
 struct Vswap {
@@ -153,8 +164,12 @@ fn decode_sprite(chunk: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn write_png(path: &Path, rgba: &[u8]) -> Result<()> {
+    write_png_wh(path, rgba, DIM, DIM)
+}
+
+fn write_png_wh(path: &Path, rgba: &[u8], w: usize, h: usize) -> Result<()> {
     let file = fs::File::create(path).with_context(|| format!("create {}", path.display()))?;
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), DIM as u32, DIM as u32);
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header()?.write_image_data(rgba)?;
@@ -192,17 +207,36 @@ fn main() -> Result<()> {
         }
     }
 
+    // optional: VGAGRAPH pics (status bar, BJ face, fonts) if the trio is provided
+    let mut pics_written = 0usize;
+    let mut pic_dims: Vec<serde_json::Value> = Vec::new();
+    if let (Some(dp), Some(hp), Some(gp)) = (&args.vgadict, &args.vgahead, &args.vgagraph) {
+        let (dict, head, graph) = (fs::read(dp)?, fs::read(hp)?, fs::read(gp)?);
+        match vga::decode_pics(&dict, &head, &graph, args.start_pics) {
+            Ok(pics) => {
+                for p in &pics {
+                    write_png_wh(&args.out.join(format!("pic_{:03}.png", p.index)), &p.rgba, p.w, p.h)?;
+                    pics_written += 1;
+                    pic_dims.push(serde_json::json!({ "i": p.index, "w": p.w, "h": p.h }));
+                }
+            }
+            Err(e) => eprintln!("VGAGRAPH skipped: {e}"),
+        }
+    }
+
     let manifest = serde_json::json!({
         "wall_count": v.sprite_start,
         "sprite_count": v.sound_start - v.sprite_start,
         "walls_written": walls,
         "sprites_written": sprites,
+        "pics_written": pics_written,
+        "pics": pic_dims,
         "dim": DIM,
     });
     fs::write(args.out.join("manifest.json"), serde_json::to_vec_pretty(&manifest)?)?;
 
     println!(
-        "wl-extract: {walls} walls + {sprites} sprites -> {} (manifest.json written)",
+        "wl-extract: {walls} walls + {sprites} sprites + {pics_written} pics -> {} (manifest.json written)",
         args.out.display()
     );
     if walls == 0 && sprites == 0 {

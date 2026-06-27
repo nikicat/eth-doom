@@ -95,7 +95,7 @@ are deviations from id's *render-coupled* code, not between our two implementati
 | sim oracle (ground truth) | C | cc/make |
 | differential + gas harness | Rust | alloy + in-process anvil |
 | client (first-person view + HUD) | TypeScript | Vite + viem; DDA raycaster adapted from 3DSage (MIT) |
-| asset extractor (VSWAP → PNG textures/sprites) | Rust | `png`; reads user-provided shareware, nothing committed |
+| asset extractor (VSWAP textures/sprites + VGAGRAPH HUD pics) | Rust | `png`; reads user-provided shareware, nothing committed |
 
 `reference/` (id's Wolf3D source) is **not committed** — it's under a restrictive license; clone
 commands are in the root README. No id game assets are committed.
