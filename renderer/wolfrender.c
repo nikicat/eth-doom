@@ -144,8 +144,11 @@ EMSCRIPTEN_KEEPALIVE void render(double px, double py, double pa) {
         double lineH = (U / perp) * PROJ;
         if (lineH > VH * 3) lineH = VH * 3;
         double topf = VH / 2.0 - lineH / 2.0;
-        double shade = fmax(0.16, fmin(1.0, 1.25 - perp / 760.0));
-        double bright = vertical ? shade : fmax(0.1, shade - 0.22); /* darken N/S faces */
+        /* M5: flat lighting — Wolf3D's VGA renderer applies NO distance shading; the
+         * only brightness variation is the light/dark texture page picked per wall axis.
+         * `wallpage(tile, vertical)` already selects the dark (N/S) page, so textured
+         * walls render at full brightness. The procedural fallback (no real art) keeps a
+         * constant two-tone side darken — a depth cue with no distance falloff. */
         int door = is_door(tile);
         int page = door ? DOOR_PAGE : wallpage(tile, vertical);
         int has = page < NPAGES && TEXOK[page];
@@ -159,11 +162,11 @@ EMSCRIPTEN_KEEPALIVE void render(double px, double py, double pa) {
                 int row = (int)(((y - topf) / lineH) * 64.0);
                 if (row < 0) row = 0; if (row > 63) row = 63;
                 unsigned char *t = &TEX[(((size_t)page * 64 + row) * 64 + sx) * 4];
-                r = (unsigned char)(t[0] * bright); g = (unsigned char)(t[1] * bright); b = (unsigned char)(t[2] * bright);
+                r = t[0]; g = t[1]; b = t[2]; /* flat-lit: dark VSWAP page handles N/S faces */
             } else {
-                float side = vertical ? 1.0f : 0.74f;
-                if (door) { r = (unsigned char)(74 * shade * side); g = (unsigned char)(96 * shade * side); b = (unsigned char)(132 * shade * side); }
-                else      { r = (unsigned char)(150 * shade * side); g = (unsigned char)(132 * shade * side); b = (unsigned char)(108 * shade * side); }
+                float side = vertical ? 1.0f : 0.70f; /* constant two-tone, no distance falloff */
+                if (door) { r = (unsigned char)(74 * side); g = (unsigned char)(96 * side); b = (unsigned char)(132 * side); }
+                else      { r = (unsigned char)(150 * side); g = (unsigned char)(132 * side); b = (unsigned char)(108 * side); }
             }
             int o = (y * VW + c) * 4;
             FB[o] = r; FB[o + 1] = g; FB[o + 2] = b; FB[o + 3] = 255;

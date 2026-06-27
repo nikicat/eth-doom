@@ -10,8 +10,10 @@
       .wrap { display: flex; gap: 16px; padding: 12px 16px; flex-wrap: wrap; align-items: flex-start; }
       .game { display: flex; flex-direction: column; gap: 0; }
       canvas { image-rendering: pixelated; display: block; }
-      #view { border: 1px solid #000; background: #000; }
-      #hud { border: 1px solid #000; border-top: none; }
+      /* Wolf3D-native internal res (320x160 view + 320x40 bar) displayed at 4:3:
+         x2 horizontal, x2.4 vertical is the 320x200 -> 4:3 pixel-aspect stretch. */
+      #view { border: 1px solid #000; background: #000; width: 640px; height: 384px; }
+      #hud { border: 1px solid #000; border-top: none; width: 640px; height: 96px; }
       .side { display: flex; flex-direction: column; gap: 10px; }
       #map { border: 1px solid #333; background: #000; }
       #dbg { white-space: pre; line-height: 1.5; margin: 0; color: #9ab; }
@@ -23,8 +25,8 @@
     <h1>eth-doom — a Wolfenstein world simulation running on the EVM (anvil)</h1>
     <div class="wrap">
       <div class="game">
-        <canvas id="view" width="640" height="400"></canvas>
-        <canvas id="hud" width="640" height="80"></canvas>
+        <canvas id="view" width="320" height="160"></canvas>
+        <canvas id="hud" width="320" height="40"></canvas>
       </div>
       <div class="side">
         <canvas id="map" width="200" height="200"></canvas>

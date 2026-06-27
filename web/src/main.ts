@@ -365,6 +365,26 @@ const view = document.getElementById("view") as HTMLCanvasElement;
 const vctx = view.getContext("2d")!;
 const VW = view.width, VH = view.height;
 
+// M5: the Wolf3D play border — a beveled gray frame around the 3D viewport, painted
+// over the outer BORDER px of the view each frame (DrawPlayBorder in WL_DRAW.C draws a
+// raised outer + sunken inner bevel in the border gray). Drawn last so it stays crisp
+// over sprites / flashes / the death fade.
+const BORDER = 7;
+function drawBorder() {
+  const w = VW, h = VH, b = BORDER;
+  vctx.fillStyle = "#a8a8a8"; // frame fill
+  vctx.fillRect(0, 0, w, b); vctx.fillRect(0, h - b, w, b);
+  vctx.fillRect(0, 0, b, h); vctx.fillRect(w - b, 0, b, h);
+  // raised outer bevel (light top/left, dark bottom/right)
+  vctx.fillStyle = "#e0e0e0"; vctx.fillRect(0, 0, w, 1); vctx.fillRect(0, 0, 1, h);
+  vctx.fillStyle = "#585858"; vctx.fillRect(0, h - 1, w, 1); vctx.fillRect(w - 1, 0, 1, h);
+  // sunken inner bevel around the viewport opening (dark top/left, light bottom/right)
+  vctx.fillStyle = "#585858";
+  vctx.fillRect(b - 1, b - 1, w - 2 * b + 1, 1); vctx.fillRect(b - 1, b - 1, 1, h - 2 * b + 1);
+  vctx.fillStyle = "#e0e0e0";
+  vctx.fillRect(b - 1, h - b, w - 2 * b + 1, 1); vctx.fillRect(w - b, b - 1, 1, h - 2 * b + 1);
+}
+
 const hudC = document.getElementById("hud") as HTMLCanvasElement;
 const hctx = hudC.getContext("2d")!;
 
@@ -594,19 +614,8 @@ function drawGuardSprite(px: number, py: number, pa: number, g: Guard, clock: nu
   const top = floorY - sprH;
   const left = cx - sprW / 2;
 
-  // distance-shade a copy while preserving the sprite's transparency
-  const shade = Math.max(0.32, Math.min(1, 1.18 - perp / 760));
-  let src: HTMLCanvasElement = img;
-  if (shade < 0.98) {
-    tmpCtx.globalCompositeOperation = "source-over";
-    tmpCtx.clearRect(0, 0, 64, 64);
-    tmpCtx.drawImage(img, 0, 0);
-    tmpCtx.globalCompositeOperation = "source-atop";
-    tmpCtx.fillStyle = `rgba(0,0,0,${1 - shade})`;
-    tmpCtx.fillRect(0, 0, 64, 64);
-    tmpCtx.globalCompositeOperation = "source-over";
-    src = tmp;
-  }
+  // M5: flat-lit — Wolf3D doesn't distance-shade sprites; draw at full brightness.
+  const src: HTMLCanvasElement = img;
 
   const x0 = Math.max(0, Math.floor(left)), x1 = Math.min(VW - 1, Math.ceil(left + sprW));
   for (let xs = x0; xs <= x1; xs++) {
@@ -696,7 +705,7 @@ function drawGuard(px: number, py: number, pa: number, g: Guard, clock: number) 
   const top = floorY - spriteH;
   const left = cx - spriteW / 2;
   const colW = spriteW / TEXW, rowH = spriteH / TEXH;
-  const shade = Math.max(0.28, Math.min(1, 1.15 - perp / 720));
+  const shade = 1; // M5: flat-lit (no distance shading), asset-free fallback
   const pal = guardPalette(g);
 
   for (let tx = 0; tx < TEXW; tx++) {
@@ -807,7 +816,7 @@ function renderView(s: State, clock: number, fx: Fx) {
     vctx.fillRect(0, 0, VW, VH);
     if (t >= 1) {
       vctx.fillStyle = "#f55";
-      vctx.font = "bold 48px ui-monospace, monospace";
+      vctx.font = `bold ${Math.round(VW * 0.075)}px ui-monospace, monospace`;
       vctx.textAlign = "center";
       vctx.fillText("YOU DIED", VW / 2, VH / 2);
       vctx.textAlign = "left";
@@ -815,6 +824,8 @@ function renderView(s: State, clock: number, fx: Fx) {
   } else if (deathAt !== 0) {
     deathAt = 0; // revived (new game) — reset the sequence
   }
+
+  drawBorder(); // M5: frame the viewport (over everything, incl. the death fade)
 }
 
 // the original TS wall raycaster (ceiling/floor fill + one ray per column), used when
@@ -836,7 +847,9 @@ function renderWallsTS(px: number, py: number, pa: number) {
     let lineH = (U / perp) * PROJ;
     if (lineH > VH * 3) lineH = VH * 3;
     const top = VH / 2 - lineH / 2;
-    const shade = Math.max(0.16, Math.min(1, 1.25 - perp / 760));
+    // M5: flat lighting — no distance shading (Wolf3D's VGA renderer has none). N/S
+    // faces are darkened by the dark VSWAP page (wallPage +1), or a constant two-tone
+    // side factor in the procedural fallback. See renderer/wolfrender.c.
     const door = isDoor(hit.tile);
     if (assets) {
       // real Wolf3D texture for this tile's value + face; blit a 1px source column
@@ -844,17 +857,14 @@ function renderWallsTS(px: number, py: number, pa: number) {
       const tex = assets.walls.get(page) ?? assets.walls.get(0)!;
       const sx = Math.min(63, Math.max(0, Math.floor(hit.tex)));
       vctx.drawImage(tex, sx, 0, 1, 64, c, top, 1, lineH);
-      let darkA = 1 - shade;
-      if (!hit.vertical) darkA = Math.min(0.9, darkA + 0.22); // darken N/S faces
-      if (darkA > 0.02) { vctx.fillStyle = `rgba(0,0,0,${darkA})`; vctx.fillRect(c, top, 1, lineH); }
     } else if (door) {
-      const side = hit.vertical ? 1 : 0.74;
-      const r = (74 * shade * side) | 0, gg = (96 * shade * side) | 0, b = (132 * shade * side) | 0; // steel door
+      const side = hit.vertical ? 1 : 0.7;
+      const r = (74 * side) | 0, gg = (96 * side) | 0, b = (132 * side) | 0; // steel door
       vctx.fillStyle = `rgb(${r},${gg},${b})`;
       vctx.fillRect(c, top, 1, lineH);
     } else {
-      const side = hit.vertical ? 1 : 0.74; // darken N/S faces for depth cue
-      const r = (150 * shade * side) | 0, gg = (132 * shade * side) | 0, b = (108 * shade * side) | 0;
+      const side = hit.vertical ? 1 : 0.7; // darken N/S faces for depth cue
+      const r = (150 * side) | 0, gg = (132 * side) | 0, b = (108 * side) | 0;
       vctx.fillStyle = `rgb(${r},${gg},${b})`;
       vctx.fillRect(c, top, 1, lineH);
     }
@@ -961,10 +971,14 @@ function drawFace(cx: number, cy: number, health: number, hurt: boolean) {
 }
 
 function renderHud(s: State, gas: number | null, clock: number, fx: Fx) {
+  // this procedural bar was authored in a 640x80 design space; the canvas is now native
+  // 320x40, so map design coords onto it (then CSS scales the canvas up to 640x96).
+  hctx.save();
+  hctx.setTransform(hudC.width / 640, 0, 0, hudC.height / 80, 0, 0);
   hctx.fillStyle = "#3c3c42";
-  hctx.fillRect(0, 0, hudC.width, hudC.height);
+  hctx.fillRect(0, 0, 640, 80);
   hctx.fillStyle = "#2a2a30";
-  hctx.fillRect(0, 0, hudC.width, 6);
+  hctx.fillRect(0, 0, 640, 6);
 
   const hp = Math.max(0, s.player.health);
   const hpColor = hp <= 0 ? "#f33" : hp < 35 ? "#f73" : hp < 75 ? "#fd6" : "#6f6";
@@ -975,13 +989,14 @@ function renderHud(s: State, gas: number | null, clock: number, fx: Fx) {
   const keyTag = (s.player.keys & 1 ? " G" : "") + (s.player.keys & 2 ? " S" : ""); // gold/silver
   cell(440, 95, "SCORE", String(s.player.score) + keyTag, "#fd6");
   cell(535, 105, "GAS", gas != null ? (gas / 1000).toFixed(0) + "k" : "—", "#6cf");
+  hctx.restore();
 }
 
 // authentic Wolf3D status bar: the real STATUSBARPIC + white digit font + the BJ
 // face (chosen by health). Wolf3D's StatusDrawPic(x,y,pic) places x in 8px tiles,
 // y in pixels from the bar top; LatchNumber right-aligns digits in a field. 2x scale.
 function renderHudReal(s: State, A: Assets, clock: number) {
-  const S = 2; // 320x40 bar → 640x80 canvas
+  const S = 1; // native 320x40 bar; the canvas is CSS-scaled to 640x96 (4:3 stretch)
   hctx.imageSmoothingEnabled = false;
   hctx.clearRect(0, 0, hudC.width, hudC.height);
   hctx.drawImage(A.pics.get(PIC_STATUSBAR)!, 0, 0, 320, 40, 0, 0, 320 * S, 40 * S);
