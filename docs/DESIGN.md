@@ -49,7 +49,7 @@ Session  per-game packed world state                    raycaster view       gol
 `Engine.sol`, the harness, and the web decoder:
 
 - **header**: `rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24 |
-  haspushwall:bit@40 | exit:uint8@48` (exit_t — 0 still playing, 1 completed; once nonzero the
+  numpushwalls:uint8@40 | exit:uint8@48` (exit_t — 0 still playing, 1 completed; once nonzero the
   Engine freezes, re-packing the world unchanged so further inputs are no-ops)
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
   tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176 |
