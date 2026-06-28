@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      # harness's alloy::sol! macros embed contracts/out/*.json at compile time,
+      # so the contracts must be built before `cargo test` will compile.
+      - run: forge build
+        working-directory: contracts
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
         working-directory: rust
