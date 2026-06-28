@@ -57,17 +57,18 @@ const PWDX = [0, 1, 0, -1], PWDY = [-1, 0, 1, 0]; // di_north, di_east, di_south
 // _applyPushwall, tile-granular): per record the path resets to base, then crosses c=0..3
 // vacate start..start+(c-1) and place the wall at start+c (+ start+c+1 while sliding). The
 // sub-tile slide (pwallpos) is not modeled here — walls relocate tile-by-tile.
-function applyPushwalls(pwalls, base, w, tp) {
+function applyPushwalls(pwalls, base, w, tp, pwp) {
   for (const pw of pwalls ?? []) {
-    const set = (k, v) => {
-      const i = (pw.sy + PWDY[pw.dir] * k) * w + (pw.sx + PWDX[pw.dir] * k);
-      if (i >= 0 && i < base.length) M.HEAP32[tp + i] = v;
-    };
-    for (let k = 0; k <= 4; k++) set(k, base[(pw.sy + PWDY[pw.dir] * k) * w + (pw.sx + PWDX[pw.dir] * k)]); // reset path
+    const idx = (k) => (pw.sy + PWDY[pw.dir] * k) * w + (pw.sx + PWDX[pw.dir] * k);
+    const set = (k, v) => { const i = idx(k); if (i >= 0 && i < base.length) M.HEAP32[tp + i] = v; };
+    const off = (k, v) => { const i = idx(k); if (i >= 0 && i < base.length) M.HEAP32[pwp + i] = v; };
+    for (let k = 0; k <= 4; k++) { set(k, base[idx(k)]); off(k, 0); } // reset path tiles + offsets
     const c = pw.state === 0 ? 3 : Math.floor(pw.state / 128);
     for (let k = 0; k < c; k++) set(k, 0); // vacated -> floor
-    set(c, pw.tile); // leading wall
+    set(c, pw.tile); // leading wall (active tile)
     if (c < 3) set(c + 1, pw.tile);
+    // sub-tile slide: the near face is `frac` into the active tile c (encode dir + frac for wolfrender)
+    if (pw.state !== 0) off(c, (pw.dir + 1) | (Math.round(((pw.state % 128) / 128) * 1024) << 2));
   }
 }
 
@@ -101,13 +102,13 @@ for (const f of scenarios) {
   const ndoors = golden.find((g) => g.doors)?.doors.length ?? 0;
 
   M._rinit(w, h, VW, VH, 0); // npages 0 -> procedural fallback (asset-free, deterministic)
-  const tp = M._tiles_ptr() >> 2;
+  const tp = M._tiles_ptr() >> 2, pwp = M._pwoff_ptr() >> 2;
   const base = Int32Array.from(tiles); // immutable base tilemap (pushwall overlays onto a copy)
   for (let i = 0; i < w * h; i++) M.HEAP32[tp + i] = base[i];
 
   const frames = golden.map((snap, t) => {
     if (!shouldCheck(t)) return null;
-    applyPushwalls(snap.pwalls, base, w, tp); // reconstruct the moved walls into wolfrender's tiles
+    applyPushwalls(snap.pwalls, base, w, tp, pwp); // reconstruct moved walls + sub-tile offsets
     return frameHash(snap, ndoors);
   });
 

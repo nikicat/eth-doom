@@ -30,7 +30,8 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   effective tilemap each tick** from a small packed pushwall record — differential-verified bit-for-bit
   against the C oracle (which mutates its tilemap directly) across the whole slide and completion. The
   client + the T3 pixel-match reconstruct the moved walls into `wolfrender`'s tilemap, so the sliding
-  walls **render** (tile-granular — they relocate tile-by-tile; the sub-tile slide is deferred).
+  walls **render** — and glide **sub-tile** (smoothly, tic-by-tic) via a per-record near-face offset in
+  the raycaster (id's `HitVert`/`HitHorizPWall`), not a tile-by-tile jump.
   **Several secret walls can slide at once** — the packed state holds a sparse list of records (like the
   active-door list), and `map-extract` reads the plane-1 `PUSHABLETILE` markers, so **E1L1's 5 real
   secret walls all work** (differential-verified two-pushwall scenario `multi_push`: two walls sliding
@@ -113,7 +114,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 
 | | status | scope |
 |---|---|---|
-| **M6** weapons & world completeness | 🟡 | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); **pushwalls / secret walls** (slice 3) ✅ — `Cmd_Use` slides a pushable wall (`PushWall`/`MovePWalls`); the immutable-Map tilemap is **reconstructed each tick** from a packed pushwall record (the vacated tiles become walkable + join the player's area, the wall relocates), differential-verified across the full slide + completion (`push_secret`), and the sliding wall **renders** (client + T3 reconstruct the moved tilemap for `wolfrender`, tile-granular); **multi-pushwall** ✅ — a sparse list of records (several walls slide at once), `map-extract` reads plane-1 `PUSHABLETILE` so E1L1's 5 real secret walls work, differential-verified (`multi_push`, two concurrent walls); sub-tile slide deferred; **elevator + level exit** (slice 4) ✅ — `Cmd_Use` on an `ELEVATORTILE` (east/west wall) latches `exit = ex_completed` and **freezes the sim** (oracle + wasm + Engine short-circuit; the Session is terminal), differential-verified (`level_exit`); E1L1's real exit elevator works for free (`map-extract` keeps wall tile values); the **client plays Wolf3D's level-complete intermission** (doors close → "LEVEL COMPLETED" + BJ + score count-up, render-only). No floor 2 — a demo keeps one immutable Map per Session; `ex_secretlevel` + multi-level flow deferred |
+| **M6** weapons & world completeness | ✅ | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); **pushwalls / secret walls** (slice 3) ✅ — `Cmd_Use` slides a pushable wall (`PushWall`/`MovePWalls`); the immutable-Map tilemap is **reconstructed each tick** from a packed pushwall record (the vacated tiles become walkable + join the player's area, the wall relocates), differential-verified across the full slide + completion (`push_secret`), and the sliding wall **renders** (client + T3 reconstruct the moved tilemap for `wolfrender`, tile-granular); **multi-pushwall** ✅ — a sparse list of records (several walls slide at once), `map-extract` reads plane-1 `PUSHABLETILE` so E1L1's 5 real secret walls work, differential-verified (`multi_push`, two concurrent walls); the walls glide **sub-tile** (smooth slide, render-only — a near-face offset in `wolfrender`, id's `HitVert`/`HitHorizPWall`); **elevator + level exit** (slice 4) ✅ — `Cmd_Use` on an `ELEVATORTILE` (east/west wall) latches `exit = ex_completed` and **freezes the sim** (oracle + wasm + Engine short-circuit; the Session is terminal), differential-verified (`level_exit`); E1L1's real exit elevator works for free (`map-extract` keeps wall tile values); the **client plays Wolf3D's level-complete intermission** (doors close → "LEVEL COMPLETED" + BJ + score count-up, render-only). No floor 2 — a demo keeps one immutable Map per Session; `ex_secretlevel` + multi-level flow deferred |
 | **M7** audio | ⬜ | digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas |
 | **M8** presentation shell | ⬜ | title / menu / "Get Psyched!" / level-intermission tally / episode flow |
 | **M9** MegaETH deployment | ⛔ | deploy to MegaETH testnet; fire-and-forget session-key play at ~native rate; end-to-end latency + gas (needs an RPC + funded key) |
@@ -217,12 +218,12 @@ anvil --silent &
 
 ## Next
 
-- **M6 🟡 nearly done** — weapons & world completeness. Done: blocking-decoration collision (slice 1) ·
-  weapon roster + switching (slice 2) · pushwalls + **multi-pushwall** (slice 3 — a sparse list of
-  records, `map-extract` reads plane-1 `PUSHABLETILE`, E1L1's 5 secret walls all work) · **elevator +
-  level exit** (slice 4 — the switch ends the level, the sim freezes, and the client plays Wolf3D's
-  level-complete intermission; no floor 2 for a demo). Remaining (render polish, optional): the pushwall
-  **sub-tile slide** (`pwallpos`). `ex_secretlevel` / actual level→level flow stay out of scope (a demo).
+- **M6 ✅ done** — weapons & world completeness: blocking-decoration collision (slice 1) · weapon roster
+  + switching (slice 2) · pushwalls + **multi-pushwall** + the **sub-tile slide** (slice 3 — a sparse list
+  of records, `map-extract` reads plane-1 `PUSHABLETILE` so E1L1's 5 secret walls all work, and they glide
+  smoothly via a near-face raycaster offset) · **elevator + level exit** (slice 4 — the switch ends the
+  level, the sim freezes, and the client plays Wolf3D's level-complete intermission). `ex_secretlevel` /
+  actual level→level flow stay out of scope (a demo). Next milestone: **M7** (audio).
 - **Gas**: state re-pack ✅ and SSTORE2 map ✅ are done; the remaining levers are per-actor
   packing (re-encoding every actor each tick) and capping live-actor count.
 - **M3**: dormant guards + line-of-sight ✅, doors ✅, pickups ✅ (ammo/health/keys/treasure, keys

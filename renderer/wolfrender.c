@@ -27,6 +27,15 @@ static unsigned char *FB;     /* VW*VH*4 RGBA framebuffer */
 static float *ZB;             /* VW perpendicular wall distance per column */
 static int *TILES;            /* W*H runtime tilemap (1..89 wall, 0x80|n door, 0 floor) */
 static float *DOORF;          /* per-door open fraction 0..1 (index = doornum) */
+/* W*H per-tile sub-tile pushwall offset: 0 = none; else (dir+1) | (fracQ<<2), where dir is
+ * the slide cardinal (DI_NORTH/EAST/SOUTH/WEST) and frac=(fracQ/1024) is how far the wall has
+ * slid into this tile. A ray hitting this tile while moving in the slide dir advances a
+ * fractional step to the offset near face (id WL_DRAW.C HitVert/HitHorizPWall) — a smooth slide. */
+static int *PWOFF;
+#define DI_NORTH 0
+#define DI_EAST  1
+#define DI_SOUTH 2
+#define DI_WEST  3
 static unsigned char *TEX;    /* NPAGES * 64 * 64 * 4 RGBA, row-major per page */
 static unsigned char *TEXOK;  /* NPAGES: 1 if the page has real texture data */
 
@@ -35,6 +44,7 @@ EMSCRIPTEN_KEEPALIVE void rinit(int w, int h, int vw, int vh, int npages) {
     FB = malloc((size_t)vw * vh * 4);
     ZB = malloc((size_t)vw * sizeof(float));
     TILES = malloc((size_t)w * h * sizeof(int));
+    PWOFF = calloc((size_t)w * h, sizeof(int));
     DOORF = calloc(256, sizeof(float));
     TEX = calloc((size_t)npages * TEXSZ * TEXSZ * 4, 1);
     TEXOK = calloc(npages, 1);
@@ -45,6 +55,7 @@ EMSCRIPTEN_KEEPALIVE void rinit(int w, int h, int vw, int vh, int npages) {
 EMSCRIPTEN_KEEPALIVE unsigned char *fb_ptr(void) { return FB; }
 EMSCRIPTEN_KEEPALIVE float *zb_ptr(void) { return ZB; }
 EMSCRIPTEN_KEEPALIVE int *tiles_ptr(void) { return TILES; }
+EMSCRIPTEN_KEEPALIVE int *pwoff_ptr(void) { return PWOFF; }
 EMSCRIPTEN_KEEPALIVE float *doorf_ptr(void) { return DOORF; }
 EMSCRIPTEN_KEEPALIVE unsigned char *tex_ptr(void) { return TEX; }
 EMSCRIPTEN_KEEPALIVE unsigned char *texok_ptr(void) { return TEXOK; }
@@ -63,6 +74,34 @@ static int ray_blocked(int v, float frac) {
      * the panel (offset by `open` in cast_ray), so it slides instead of being cropped. */
     if (is_door(v)) return frac >= DOORF[v & 0x7f];
     return 0;
+}
+
+/* If tile mp is a sliding pushwall and the ray steps in the slide direction, advance the
+ * intercept a fractional step pf so the near face sits at its sub-tile offset (a smooth
+ * slide) instead of snapping to the grid line. slideX selects the axis the pass handles
+ * (X-pass: E/W walls; Y-pass: N/S). The off-axis side faces stay grid-aligned (they hug the
+ * corridor walls pushwalls live between, so it isn't visible) — id WL_DRAW.C HitVert/HitHorizPWall. */
+static void pwall_shift(int mp, int slideX, double xo, double yo, double *rx, double *ry) {
+    int pw = PWOFF[mp];
+    if (!pw) return;
+    int dir = (pw & 3) - 1;
+    double pf = (double)(pw >> 2) / 1024.0;
+    int go = slideX ? ((dir == DI_EAST && xo > 0) || (dir == DI_WEST && xo < 0))
+                    : ((dir == DI_SOUTH && yo > 0) || (dir == DI_NORTH && yo < 0));
+    if (go) { *rx += xo * pf; *ry += yo * pf; }
+}
+
+/* Does tile mp block the ray at this grid crossing? Walls/doors as ray_blocked; a pushwall
+ * active tile is fully solid on its SLIDE-AXIS pass (slideX==1 for E/W walls, 0 for N/S — the
+ * near-face offset is applied by pwall_shift) and solid only past the slid offset on the
+ * PERPENDICULAR pass (frac threshold), so even an isolated pillar's side faces track the slide. */
+static int pw_hit(int mp, int slideX, double frac) {
+    int pw = PWOFF[mp];
+    if (!pw) return ray_blocked(TILES[mp], (float)frac);
+    int dir = (pw & 3) - 1;
+    double off = (double)(pw >> 2) / 1024.0;
+    if ((dir == DI_EAST || dir == DI_WEST) == slideX) return 1; /* slide-axis: full solid */
+    return (dir == DI_EAST || dir == DI_SOUTH) ? (frac >= off) : (frac <= 1.0 - off);
 }
 
 /* Cast one ray; fill *dist (perp-less raw), *vertical, *tex (0..63), *tile. The DDA
@@ -91,7 +130,8 @@ static void cast_ray(double px, double py, double ra,
     while (dof < maxdof) {
         int mx = (int)floor(rx / U), my = (int)floor(ry / U), mp = my * W + mx;
         double frac = ry / U - floor(ry / U);
-        if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], (float)frac)) {
+        if (mx >= 0 && mx < W && my >= 0 && my < H && pw_hit(mp, 1, frac)) {
+            pwall_shift(mp, 1, xo, yo, &rx, &ry); /* sub-tile slide: E/W pushwall near face */
             dof = maxdof; disV = cs * (rx - px) - sn * (ry - py); vy = ry; vtile = TILES[mp];
         } else { rx += xo; ry += yo; dof++; }
     }
@@ -105,7 +145,8 @@ static void cast_ray(double px, double py, double ra,
     while (dof < maxdof) {
         int mx = (int)floor(rx / U), my = (int)floor(ry / U), mp = my * W + mx;
         double frac = rx / U - floor(rx / U);
-        if (mx >= 0 && mx < W && my >= 0 && my < H && ray_blocked(TILES[mp], (float)frac)) {
+        if (mx >= 0 && mx < W && my >= 0 && my < H && pw_hit(mp, 0, frac)) {
+            pwall_shift(mp, 0, xo, yo, &rx, &ry); /* sub-tile slide: N/S pushwall near face */
             dof = maxdof; disH = cs * (rx - px) - sn * (ry - py); hx = rx; htile = TILES[mp];
         } else { rx += xo; ry += yo; dof++; }
     }

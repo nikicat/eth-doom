@@ -44,6 +44,7 @@ let sceneryList: number[][] = []; // [tilex, tiley, spriteIndex] decorative stat
 let blockerList: number[][] = []; // [tilex, tiley] blocking statics (on-chain movement collision, M6)
 let pushwallList: number[][] = []; // [tilex, tiley] pushable secret walls (Cmd_Use slides them, M6)
 let baseTiles = new Uint16Array(0); // the unmoved tilemap; the pushwall overlays onto a copy
+let pwoffLive = new Int32Array(0); // per-tile sub-tile pushwall offset (dir+1)|(fracQ<<2) for wolfrender
 let areaMap: number[] = []; // per-tile area number (row-major); empty => single area
 let levelName = "test room";
 
@@ -239,7 +240,7 @@ async function loadWasmRenderer(): Promise<WallRenderer | null> {
     const NPAGES = 220; // covers wall pages (≤ (89-1)*2+1) + the door page (98)
     M._rinit(W, H, VW, VH, NPAGES);
     // tiles (int32, once)
-    const tp = M._tiles_ptr() >> 2;
+    const tp = M._tiles_ptr() >> 2, pwp = M._pwoff_ptr() >> 2;
     for (let i = 0; i < W * H; i++) M.HEAP32[tp + i] = tiles[i] & 0xff;
     // wall textures (RGBA 64x64 per page, once) from the decoded VSWAP canvases
     const texBase = M._tex_ptr(), okBase = M._texok_ptr();
@@ -264,7 +265,8 @@ async function loadWasmRenderer(): Promise<WallRenderer | null> {
         for (let c = 0; c < VW; c++) zbuf[c] = M.HEAPF32[zbBase + c]; // depth for sprites
       },
       syncTiles(idxs) {
-        for (const i of idxs) M.HEAP32[tp + i] = tiles[i] & 0xff; // re-upload a moved pushwall tile
+        // re-upload a moved pushwall tile + its sub-tile offset (drives the smooth slide)
+        for (const i of idxs) { M.HEAP32[tp + i] = tiles[i] & 0xff; M.HEAP32[pwp + i] = pwoffLive[i]; }
       },
     };
   } catch (e) {
@@ -887,12 +889,20 @@ function applyPushwallOverlay(s: State): number[] {
   const changed: number[] = [];
   for (const pw of s.pushwalls) {
     const idx = (k: number) => (pw.sy + PWDY[pw.dir] * k) * W + (pw.sx + PWDX[pw.dir] * k);
-    const set = (k: number, v: number) => { const i = idx(k); if (i >= 0 && i < tiles.length) { tiles[i] = v; changed.push(i); } };
-    for (let k = 0; k <= 4; k++) set(k, baseTiles[idx(k)]); // reset the path to base
+    const set = (k: number, v: number) => {
+      const i = idx(k);
+      if (i >= 0 && i < tiles.length) { tiles[i] = v; pwoffLive[i] = 0; changed.push(i); }
+    };
+    for (let k = 0; k <= 4; k++) set(k, baseTiles[idx(k)]); // reset path tiles + offsets to base
     const c = pw.state === 0 ? 3 : Math.floor(pw.state / 128);
     for (let k = 0; k < c; k++) set(k, 0); // vacated -> floor
-    set(c, pw.tile); // leading wall
+    set(c, pw.tile); // leading wall (active tile)
     if (c < 3) set(c + 1, pw.tile);
+    // sub-tile slide: encode the near-face offset (dir + frac) on the active tile c for wolfrender
+    if (pw.state !== 0) {
+      const i = idx(c);
+      if (i >= 0 && i < tiles.length) pwoffLive[i] = (pw.dir + 1) | (Math.round(((pw.state % 128) / 128) * 1024) << 2);
+    }
   }
   return changed;
 }
@@ -1371,6 +1381,7 @@ async function main() {
   dbg.textContent = "loading level + assets / deploying to anvil…";
   await loadLevel(); // real Wolf3D level from /level.json if present, else the test room
   baseTiles = Uint16Array.from(tiles); // snapshot the unmoved tilemap for pushwall overlays
+  pwoffLive = new Int32Array(W * H); // per-tile pushwall sub-tile offset, synced to the wasm renderer
   assets = await loadAssets(); // authentic id art if /wolf/*.png present, else procedural
   wall = await loadWasmRenderer(); // wasm wall raycaster if built, else the TS one
   renderLabel = wall ? "wasm (Emscripten raycaster)" : "ts raycaster";

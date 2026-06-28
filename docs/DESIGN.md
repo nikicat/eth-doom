@@ -148,12 +148,15 @@ are deviations from id's *render-coupled* code, not between our two implementati
   `0xc0` "moving" tile-flag is dropped — a relocated wall is a plain solid tile (the sim cares only
   solid-vs-floor; the sub-tile slide is a render value). With the fixed `tics=1` a wall slides 3 tiles
   (id's "two" assumes `tics>1`). The client and the T3 pixel-match reconstruct the moved walls into
-  `wolfrender`'s tilemap the same way (tile-granular), so the slide renders. **Several secret walls can
-  slide at once** — the state holds a sparse list of records (numpushwalls + one word each, like the
-  active-door list), and `map-extract` reads the plane-1 `PUSHABLETILE` markers, so E1L1's 5 real secret
-  walls all work. Re-triggering a wall already sliding is a no-op (the oracle clears that tile's
-  `pushwallat` marker; the Engine scans the active list). Remaining simplifications: no mid-slide actor
-  block-check (the trigger still checks the first destination), and the sub-tile slide (`pwallpos`) isn't drawn.
+  `wolfrender`'s tilemap, so the slide renders — and it glides **sub-tile**: the renderer derives each
+  record's slide fraction from `pwstate` and offsets the moving wall's near face into its tile (id
+  WL_DRAW.C `HitVert`/`HitHorizPWall`), so the wall moves smoothly tic-by-tic instead of jumping a whole
+  tile at each block boundary (the offset is render-only — the on-chain sim stays tile-granular for
+  collision/sight). **Several secret walls can slide at once** — the state holds a sparse list of records
+  (numpushwalls + one word each, like the active-door list), and `map-extract` reads the plane-1
+  `PUSHABLETILE` markers, so E1L1's 5 real secret walls all work. Re-triggering a wall already sliding is
+  a no-op (the oracle clears that tile's `pushwallat` marker; the Engine scans the active list). Remaining
+  simplification: no mid-slide actor block-check (the trigger still checks the first destination).
 - **The elevator ends the level; the sim then freezes.** id's `Cmd_Use` ends the level when the player
   Uses an `ELEVATORTILE` (21) on an east/west wall (`elevatorok`): it sets `playstate = ex_completed`
   and `PlayLoop` returns. Headless there's no loop to return from, so the same trigger latches an `exit`
