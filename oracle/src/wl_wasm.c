@@ -65,7 +65,7 @@ EXPORT void reset(void) {
     attackcount = 0;
     playerdead = 0;
     playstate = ex_stillplaying;   /* clear the level-end latch (persistent wasm instance) */
-    pwallstate = pwall_active = pwallpos = 0;
+    pwall_count = 0;               /* clear triggered pushwalls (persistent wasm instance) */
     memset(tilemap, 0, sizeof tilemap);
     memset(areamap, 0, sizeof areamap);
     memset(blockmap, 0, sizeof blockmap);
@@ -144,17 +144,17 @@ EXPORT int read_state(void) {
     int ad = 0;
     for (int i = 0; i < nd; i++)
         if (doorobjlist[i].action != dr_closed) ad++;
-    int hp = pwall_active ? 1 : 0; /* one trailing pushwall word once triggered */
-    int nwords = 2 + ad + iw + na + hp;
+    int np = pwall_count;          /* one trailing word per triggered pushwall */
+    int nwords = 2 + ad + iw + na + np;
     unsigned char *out = g_state;
     memset(out, 0, 32 * nwords);
 
-    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 | haspushwall@40 | exit@48 */
+    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 | numpushwalls@40 | exit@48 */
     put(out, 0, 8, rndindex & 0xff);
     put(out, 8, 8, na & 0xff);
     put(out, 16, 8, ad & 0xff);
     put(out, 24, 16, ni & 0xffff);
-    put(out, 40, 1, hp);
+    put(out, 40, 8, np & 0xff);
     put(out, 48, 8, playstate & 0xff);
 
     /* player word */
@@ -214,14 +214,14 @@ EXPORT int read_state(void) {
         put(aw, 216, 16, (unsigned int)a->temp2);
     }
 
-    /* trailing pushwall word (if triggered): sx@0 | sy@8 | dir@16 | state@24 | tile@40 */
-    if (hp) {
-        unsigned char *pww = out + 32 * (2 + ad + iw + na);
-        put(pww, 0, 8, pwall_startx & 0xff);
-        put(pww, 8, 8, pwall_starty & 0xff);
-        put(pww, 16, 8, pwalldir & 0xff);
-        put(pww, 24, 16, pwallstate & 0xffff);
-        put(pww, 40, 8, pwall_oldtile & 0xff);
+    /* trailing pushwall words (one per triggered wall): sx@0 | sy@8 | dir@16 | state@24 | tile@40 */
+    for (int i = 0; i < np; i++) {
+        unsigned char *pww = out + 32 * (2 + ad + iw + na + i);
+        put(pww, 0, 8, pw_startx[i] & 0xff);
+        put(pww, 8, 8, pw_starty[i] & 0xff);
+        put(pww, 16, 8, pw_dir[i] & 0xff);
+        put(pww, 24, 16, pw_state[i] & 0xffff);
+        put(pww, 40, 8, pw_oldtile[i] & 0xff);
     }
     return 32 * nwords;
 }

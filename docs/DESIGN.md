@@ -63,10 +63,11 @@ Session  per-game packed world state                    raycaster view       gol
 - **actor**: `x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88
   | ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 | obclass:uint8@168
   | speed:int32@176 | active:uint8@208 | temp2:int16@216`
-- **pushwall** (one trailing word after the actors, present iff `haspushwall`): `startx:uint8@0 |
-  starty:uint8@8 | dir:uint8@16 | pwstate:uint16@24 | tile:uint8@40`. One secret wall per session
-  (the relocation is permanent, so the record persists once triggered). The `Map` tilemap is
-  immutable, so the Engine reconstructs the effective tilemap each tick from this record.
+- **pushwalls** (`numpushwalls@40` trailing words after the actors, one per triggered secret wall):
+  `startx:uint8@0 | starty:uint8@8 | dir:uint8@16 | pwstate:uint16@24 | tile:uint8@40`. Several walls
+  may slide at once (E1L1 has 5); each record persists once triggered (the relocation is permanent).
+  The `Map` tilemap is immutable, so the Engine reconstructs the effective tilemap each tick from these.
+  (The Engine stores each record as exactly this packed word, so pack/unpack are plain copies.)
 
 ## Methodology: faithful transliteration, validated by a C oracle
 
@@ -146,10 +147,13 @@ are deviations from id's *render-coupled* code, not between our two implementati
   though the tilemap *representation* differs (the oracle's grid vs the Engine's reconstruction). id's
   `0xc0` "moving" tile-flag is dropped — a relocated wall is a plain solid tile (the sim cares only
   solid-vs-floor; the sub-tile slide is a render value). With the fixed `tics=1` a wall slides 3 tiles
-  (id's "two" assumes `tics>1`). The client and the T3 pixel-match reconstruct the moved wall into
-  `wolfrender`'s tilemap the same way (tile-granular), so the slide renders. Remaining simplifications:
-  one pushwall per session (single record, not a sparse list), no mid-slide actor block-check (the
-  trigger still checks the first destination), and the sub-tile slide (`pwallpos`) isn't drawn.
+  (id's "two" assumes `tics>1`). The client and the T3 pixel-match reconstruct the moved walls into
+  `wolfrender`'s tilemap the same way (tile-granular), so the slide renders. **Several secret walls can
+  slide at once** — the state holds a sparse list of records (numpushwalls + one word each, like the
+  active-door list), and `map-extract` reads the plane-1 `PUSHABLETILE` markers, so E1L1's 5 real secret
+  walls all work. Re-triggering a wall already sliding is a no-op (the oracle clears that tile's
+  `pushwallat` marker; the Engine scans the active list). Remaining simplifications: no mid-slide actor
+  block-check (the trigger still checks the first destination), and the sub-tile slide (`pwallpos`) isn't drawn.
 - **The elevator ends the level; the sim then freezes.** id's `Cmd_Use` ends the level when the player
   Uses an `ELEVATORTILE` (21) on an east/west wall (`elevatorok`): it sets `playstate = ex_completed`
   and `PlayLoop` returns. Headless there's no loop to return from, so the same trigger latches an `exit`

@@ -47,9 +47,13 @@ static void emit(long tick)
     printf(",\"keys\":%d,\"score\":%ld", keys, score);
     if (playstate)   /* only when the level has ended (keeps unchanged goldens byte-identical) */
         printf(",\"exit\":%d", playstate);
-    if (pwall_active)
-        printf(",\"pwall\":{\"sx\":%d,\"sy\":%d,\"dir\":%d,\"state\":%d,\"tile\":%d}",
-               pwall_startx, pwall_starty, pwalldir, pwallstate, pwall_oldtile);
+    if (pwall_count > 0) {
+        printf(",\"pwalls\":[");
+        for (int i = 0; i < pwall_count; i++)
+            printf("%s{\"sx\":%d,\"sy\":%d,\"dir\":%d,\"state\":%d,\"tile\":%d}", i ? "," : "",
+                   pw_startx[i], pw_starty[i], pw_dir[i], pw_state[i], pw_oldtile[i]);
+        printf("]");
+    }
     printf("}\n");
 }
 

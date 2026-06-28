@@ -84,13 +84,14 @@ function decode(bytes, ndoorsTotal) {
       tc: s(a, 96, 16), dist: s(a, 112, 32), hp: s(a, 144, 16), cls: u(a, 168, 8),
     });
   }
-  // pushwall: one trailing word after the actors when haspushwall@40 is set
-  let pwall = null;
-  if (u(h, 40, 1)) {
-    const pw = ws[2 + ad + iw + na];
-    pwall = { sx: u(pw, 0, 8), sy: u(pw, 8, 8), dir: u(pw, 16, 8), state: u(pw, 24, 16), tile: u(pw, 40, 8) };
+  // pushwalls: numpushwalls@40 trailing words after the actors, one per triggered wall
+  const np = u(h, 40, 8);
+  const pwalls = [];
+  for (let i = 0; i < np; i++) {
+    const pw = ws[2 + ad + iw + na + i];
+    pwalls.push({ sx: u(pw, 0, 8), sy: u(pw, 8, 8), dir: u(pw, 16, 8), state: u(pw, 24, 16), tile: u(pw, 40, 8) });
   }
-  return { ...st, doors, items, guards, pwall };
+  return { ...st, doors, items, guards, pwalls };
 }
 
 // --- wasm driver ---
@@ -150,11 +151,13 @@ function diff(got, want) {
     for (const k of ["pos", "act", "tc"]) checks.push(eq(`door[${i}].${k}`, a[k], d[k]));
   });
   if (want.items) want.items.forEach((t, i) => checks.push(eq(`item[${i}]`, got.items[i], t)));
-  // pushwall: present in the golden iff triggered; compare each field (or its absence)
-  checks.push(eq("pwall", got.pwall ? 1 : 0, want.pwall ? 1 : 0));
-  if (want.pwall && got.pwall)
-    for (const k of ["sx", "sy", "dir", "state", "tile"])
-      checks.push(eq(`pwall.${k}`, got.pwall[k], want.pwall[k]));
+  // pushwalls: the golden omits the array when none triggered; compare count + each record
+  const wantPw = want.pwalls ?? [];
+  checks.push(eq("pwalls.len", got.pwalls.length, wantPw.length));
+  wantPw.forEach((w, i) => {
+    const a = got.pwalls[i] ?? {};
+    for (const k of ["sx", "sy", "dir", "state", "tile"]) checks.push(eq(`pwalls[${i}].${k}`, a[k], w[k]));
+  });
   return checks.filter(Boolean)[0] ?? null;
 }
 

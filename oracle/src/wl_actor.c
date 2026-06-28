@@ -27,9 +27,11 @@ int      madenoise;      /* player fired this tic (alerts guards in the area) */
  * area through open doors. Gunfire (madenoise) only alerts guards where areabyplayer is set. */
 unsigned char areamap[MAPSIZE][MAPSIZE];
 
-/* pushwall state (WL_ACT1.C). pwall_active stays set once a wall is pushed (permanent). */
-int pwallstate, pwallx, pwally, pwalldir, pwallpos;
-int pwall_active, pwall_startx, pwall_starty, pwall_oldtile;
+/* pushwall state (WL_ACT1.C). A record per triggered wall (several may slide at once); a
+ * record persists once complete (the relocation is permanent). */
+int pwall_count;
+int pw_startx[MAXPWALLS], pw_starty[MAXPWALLS], pw_dir[MAXPWALLS];
+int pw_state[MAXPWALLS], pw_oldtile[MAXPWALLS], pw_curx[MAXPWALLS], pw_cury[MAXPWALLS];
 unsigned char pushwallat[MAPSIZE][MAPSIZE];
 static const int pwdx[4] = {0, 1, 0, -1}; /* di_north, di_east, di_south, di_west */
 static const int pwdy[4] = {-1, 0, 1, 0};
@@ -533,46 +535,48 @@ static int ActorOnTile(int x, int y) {
     return 0;
 }
 
-/* WL_ACT1.C PushWall — start a secret wall sliding toward `dir`. One pushwall moves at a
- * time; the first destination tile must be clear. id's 0xc0 render marker is dropped — a
+/* WL_ACT1.C PushWall — start a secret wall sliding toward `dir`, appending a record. The
+ * first destination tile must be clear. Re-trigger is prevented by clearing the tile's
+ * pushwallat marker (Cmd_Use only calls here when the marker is set) — so several distinct
+ * secret walls can each be pushed (E1L1 has 5). id's 0xc0 render marker is dropped — a
  * relocated wall is a plain solid tile (the sim cares only solid-vs-floor; the sub-tile
  * slide visual is client-side). */
 static void PushWall(int checkx, int checky, int dir) {
-    if (pwall_active) return;                  /* slice 3: one pushwall per session (single record) */
+    if (pwall_count >= MAXPWALLS) return;
     int oldtile = tilemap[checkx][checky];
     if (!oldtile) return;
     int nx = checkx + pwdx[dir], ny = checky + pwdy[dir];
     if (ActorOnTile(nx, ny)) return;           /* NOWAY: blocked */
     tilemap[nx][ny] = oldtile;                 /* the wall extends into the destination */
-    pwall_active = 1;
-    pwall_startx = pwallx = checkx;
-    pwall_starty = pwally = checky;
-    pwalldir = dir;
-    pwall_oldtile = oldtile;
-    pwallstate = 1;
-    pwallpos = 0;
+    int i = pwall_count++;
+    pw_startx[i] = pw_curx[i] = checkx;
+    pw_starty[i] = pw_cury[i] = checky;
+    pw_dir[i] = dir;
+    pw_oldtile[i] = oldtile;
+    pw_state[i] = 1;
     pushwallat[checkx][checky] = 0;            /* clear the P marker (no re-trigger) */
 }
 
-/* WL_ACT1.C MovePWalls — advance the active pushwall one tic. Each 128-unit block
- * crossing relocates the wall one tile (the trailing tile becomes floor in the player's
- * area); it stops once pwallstate passes 256 (with tics=1 that's a 3-tile slide; id's
- * "two tiles" assumes tics>1). The mid-slide actor block-check (id aborts) is dropped —
- * scenarios keep the path clear (a documented slice-3 limitation). */
+/* WL_ACT1.C MovePWalls — advance every active pushwall one tic. Each 128-unit block
+ * crossing relocates a wall one tile (the trailing tile becomes floor in the player's
+ * area); it stops once pw_state passes 256 (with tics=1 that's a 3-tile slide; id's
+ * "two tiles" assumes tics>1) — pw_state 0 then, but the record persists. The mid-slide
+ * actor block-check (id aborts) is dropped — scenarios keep the path clear. */
 void MovePWalls(void) {
-    if (!pwallstate) return;
-    int oldblock = pwallstate / 128;
-    pwallstate += 1;                           /* tics = 1 */
-    if (pwallstate / 128 != oldblock) {
-        tilemap[pwallx][pwally] = 0;           /* trailing tile -> floor */
-        areamap[pwallx][pwally] = player->areanumber;
-        if (pwallstate > 256) { pwallstate = 0; return; } /* slide complete */
-        pwallx += pwdx[pwalldir];
-        pwally += pwdy[pwalldir];
-        tilemap[pwallx][pwally] = pwall_oldtile;                          /* leading tile */
-        tilemap[pwallx + pwdx[pwalldir]][pwally + pwdy[pwalldir]] = pwall_oldtile; /* +1 ahead */
+    for (int i = 0; i < pwall_count; i++) {
+        if (!pw_state[i]) continue;            /* completed: relocation is permanent */
+        int oldblock = pw_state[i] / 128;
+        pw_state[i] += 1;                      /* tics = 1 */
+        if (pw_state[i] / 128 != oldblock) {
+            tilemap[pw_curx[i]][pw_cury[i]] = 0;           /* trailing tile -> floor */
+            areamap[pw_curx[i]][pw_cury[i]] = player->areanumber;
+            if (pw_state[i] > 256) { pw_state[i] = 0; continue; } /* slide complete */
+            pw_curx[i] += pwdx[pw_dir[i]];
+            pw_cury[i] += pwdy[pw_dir[i]];
+            tilemap[pw_curx[i]][pw_cury[i]] = pw_oldtile[i];   /* leading tile */
+            tilemap[pw_curx[i] + pwdx[pw_dir[i]]][pw_cury[i] + pwdy[pw_dir[i]]] = pw_oldtile[i]; /* +1 ahead */
+        }
     }
-    pwallpos = (pwallstate / 2) & 63;
 }
 
 /* WL_AGENT.C Cmd_Use — operate the door the player faces (edge-triggered via

@@ -1,0 +1,7 @@
+{
+  "note": "player wedged at (8,8) between two secret walls (P at (7,8) and (9,8)). Facing east, Use slides the east wall (record A); the player then spins 180° (left) and Uses again to slide the west wall (record B). Both slide CONCURRENTLY as independent records — A completes (state 0) while B is still mid-slide — exercising the multi-pushwall packed state (numpushwalls@40 + one trailing word per record), the per-record reconstruction, and the dedup that stops re-triggering an already-sliding wall.",
+  "map": "multipush_room.txt",
+  "player": { "x": 8, "y": 8, "dir": 1 },
+  "enemies": [],
+  "checkpoints": "all"
+}

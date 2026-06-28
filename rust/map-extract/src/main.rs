@@ -193,6 +193,7 @@ fn decoration_static(t: u16) -> Option<u8> {
 
 const AREATILE: u16 = 107;
 const AMBUSHTILE: u16 = 106;
+const PUSHABLETILE: u16 = 98; // WL_DEF.H: plane-1 marker for a pushable secret wall
 
 /// WL_GAME.C SetupGameLevel: turn raw plane-0 codes into the runtime tilemap the
 /// engine/client consume, and collect the door list (scan order = doornum).
@@ -266,11 +267,16 @@ fn main() -> Result<()> {
     let mut items: Vec<[u8; 3]> = Vec::new();
     let mut scenery: Vec<[u8; 3]> = Vec::new();
     let mut blockers: Vec<[u8; 2]> = Vec::new(); // blocking statics (collision) — M6
+    let mut pushwalls: Vec<[u8; 2]> = Vec::new(); // PUSHABLETILE secret walls (collision/sim) — M6
     for y in 0..h {
         for x in 0..w {
             let t = plane1[y * w + x];
             if (19..=22).contains(&t) {
                 spawn = Some((x, y, (t - 19) as u8)); // dir: N=0 E=1 S=2 W=3
+            } else if t == PUSHABLETILE {
+                // WL_GAME.C: a plane-1 PUSHABLETILE marks the solid plane-0 wall here as a
+                // pushable secret wall. Cmd_Use against it slides it (PushWall/MovePWalls).
+                pushwalls.push([x as u8, y as u8]); // tilex, tiley
             } else if let Some((cls, dir)) = enemy_spawn(t) {
                 guards.push([x as u8, y as u8, dir, cls]); // tilex, tiley, dir, class
             } else if let Some(bo) = bonus_item(t) {
@@ -316,9 +322,7 @@ fn main() -> Result<()> {
     let doors_flat = flat(&doors.iter().map(|d| d.to_vec()).collect::<Vec<_>>());
     let items_flat = flat(&items.iter().map(|i| i.to_vec()).collect::<Vec<_>>());
     let blockers_flat = flat(&blockers.iter().map(|b| b.to_vec()).collect::<Vec<_>>());
-    // pushable secret walls (plane-1 PUSHABLETILE) — extraction is a follow-up (the on-chain
-    // sim supports one pushwall per session); emit an empty list so the key always exists.
-    let pushwalls: Vec<[u8; 2]> = Vec::new();
+    // pushable secret walls (plane-1 PUSHABLETILE), collected in the scan above.
     let pushwalls_flat = flat(&pushwalls.iter().map(|b| b.to_vec()).collect::<Vec<_>>());
 
     // per-tile area number for sound localization: plane-0 floor codes >= AREATILE encode
@@ -352,12 +356,13 @@ fn main() -> Result<()> {
     }
     fs::write(&args.out, serde_json::to_vec_pretty(&level)?)?;
     println!(
-        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors, {} items, {} scenery ({} blocking) -> {}",
+        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors, {} items, {} scenery ({} blocking), {} pushwalls -> {}",
         guards.len(),
         doors.len(),
         items.len(),
         scenery.len(),
         blockers.len(),
+        pushwalls.len(),
         args.out.display()
     );
     Ok(())

@@ -52,8 +52,8 @@ struct Snap {
     score: i64,
     weapon: i64,
     bestweapon: i64,
-    exit: i64,               // exit_t: 0 still playing, 1 completed (elevator used)
-    pwall: Option<[i64; 5]>, // sx, sy, dir, state, tile (None = no pushwall triggered)
+    exit: i64,             // exit_t: 0 still playing, 1 completed (elevator used)
+    pwalls: Vec<[i64; 5]>, // one per triggered secret wall: sx, sy, dir, state, tile
 }
 
 fn load_golden(path: &str) -> Result<Vec<Snap>> {
@@ -93,9 +93,11 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
             weapon: v.get("weapon").and_then(|x| x.as_i64()).unwrap_or(1),
             bestweapon: v.get("bestweapon").and_then(|x| x.as_i64()).unwrap_or(1),
             exit: v.get("exit").and_then(|x| x.as_i64()).unwrap_or(0),
-            pwall: v.get("pwall").map(|p| {
-                let f = |k: &str| p[k].as_i64().unwrap();
-                [f("sx"), f("sy"), f("dir"), f("state"), f("tile")]
+            pwalls: v.get("pwalls").and_then(|x| x.as_array()).map_or_else(Vec::new, |arr| {
+                arr.iter().map(|p| {
+                    let f = |k: &str| p[k].as_i64().unwrap();
+                    [f("sx"), f("sy"), f("dir"), f("state"), f("tile")]
+                }).collect()
             }),
         });
     }
@@ -265,22 +267,21 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
         }
     }
 
-    // pushwall: one trailing word after the actors when haspushwall@40 is set
-    let has_pwall = field(header, 40, 1) == 1;
-    let got_pwall = if has_pwall {
-        let pw = word(state, 2 + ad + iw + n);
-        Some([
-            field(pw, 0, 8) as i64,  // sx
-            field(pw, 8, 8) as i64,  // sy
-            field(pw, 16, 8) as i64, // dir
+    // pushwalls: numpushwalls@40 trailing words after the actors, one per triggered wall
+    let np = field(header, 40, 8) as usize;
+    let mut got_pwalls = Vec::with_capacity(np);
+    for k in 0..np {
+        let pw = word(state, 2 + ad + iw + n + k);
+        got_pwalls.push([
+            field(pw, 0, 8) as i64,   // sx
+            field(pw, 8, 8) as i64,   // sy
+            field(pw, 16, 8) as i64,  // dir
             field(pw, 24, 16) as i64, // state
-            field(pw, 40, 8) as i64, // tile
-        ])
-    } else {
-        None
-    };
-    if got_pwall != want.pwall {
-        bail!("tic {tick} PUSHWALL mismatch\n  got  {:?}\n  want {:?}", got_pwall, want.pwall);
+            field(pw, 40, 8) as i64,  // tile
+        ]);
+    }
+    if got_pwalls != want.pwalls {
+        bail!("tic {tick} PUSHWALL mismatch\n  got  {:?}\n  want {:?}", got_pwalls, want.pwalls);
     }
     Ok(())
 }

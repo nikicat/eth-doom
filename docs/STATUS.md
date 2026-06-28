@@ -29,9 +29,12 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   the player's area. The `Map` tilemap is immutable (SSTORE2), so the Engine **reconstructs the
   effective tilemap each tick** from a small packed pushwall record — differential-verified bit-for-bit
   against the C oracle (which mutates its tilemap directly) across the whole slide and completion. The
-  client + the T3 pixel-match reconstruct the moved wall into `wolfrender`'s tilemap, so the sliding
-  wall **renders** (tile-granular — it relocates tile-by-tile; the sub-tile slide is deferred). One
-  pushwall per session for now (multi-pushwall is a follow-up).
+  client + the T3 pixel-match reconstruct the moved walls into `wolfrender`'s tilemap, so the sliding
+  walls **render** (tile-granular — they relocate tile-by-tile; the sub-tile slide is deferred).
+  **Several secret walls can slide at once** — the packed state holds a sparse list of records (like the
+  active-door list), and `map-extract` reads the plane-1 `PUSHABLETILE` markers, so **E1L1's 5 real
+  secret walls all work** (differential-verified two-pushwall scenario `multi_push`: two walls sliding
+  concurrently, one completing while the other is mid-slide).
 - **The elevator + level exit** — Using the elevator switch (`ELEVATORTILE`) on an east/west wall ends the
   level (`Cmd_Use` → `playstate = ex_completed`): id's `PlayLoop` would return, so headless the Engine
   **latches an `exit` byte and freezes the sim** — every later input re-packs the world unchanged (the
@@ -110,7 +113,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 
 | | status | scope |
 |---|---|---|
-| **M6** weapons & world completeness | 🟡 | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); **pushwalls / secret walls** (slice 3) ✅ — `Cmd_Use` slides a pushable wall (`PushWall`/`MovePWalls`); the immutable-Map tilemap is **reconstructed each tick** from a packed pushwall record (the vacated tiles become walkable + join the player's area, the wall relocates), differential-verified across the full slide + completion (`push_secret`), and the sliding wall **renders** (client + T3 reconstruct the moved tilemap for `wolfrender`, tile-granular); one pushwall per session, multi-pushwall + sub-tile slide deferred; **elevator + level exit** (slice 4) ✅ — `Cmd_Use` on an `ELEVATORTILE` (east/west wall) latches `exit = ex_completed` and **freezes the sim** (oracle + wasm + Engine short-circuit; the Session is terminal), differential-verified (`level_exit`); E1L1's real exit elevator works for free (`map-extract` keeps wall tile values); the **client plays Wolf3D's level-complete intermission** (doors close → "LEVEL COMPLETED" + BJ + score count-up, render-only). No floor 2 — a demo keeps one immutable Map per Session; `ex_secretlevel` + multi-level flow deferred |
+| **M6** weapons & world completeness | 🟡 | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); **pushwalls / secret walls** (slice 3) ✅ — `Cmd_Use` slides a pushable wall (`PushWall`/`MovePWalls`); the immutable-Map tilemap is **reconstructed each tick** from a packed pushwall record (the vacated tiles become walkable + join the player's area, the wall relocates), differential-verified across the full slide + completion (`push_secret`), and the sliding wall **renders** (client + T3 reconstruct the moved tilemap for `wolfrender`, tile-granular); **multi-pushwall** ✅ — a sparse list of records (several walls slide at once), `map-extract` reads plane-1 `PUSHABLETILE` so E1L1's 5 real secret walls work, differential-verified (`multi_push`, two concurrent walls); sub-tile slide deferred; **elevator + level exit** (slice 4) ✅ — `Cmd_Use` on an `ELEVATORTILE` (east/west wall) latches `exit = ex_completed` and **freezes the sim** (oracle + wasm + Engine short-circuit; the Session is terminal), differential-verified (`level_exit`); E1L1's real exit elevator works for free (`map-extract` keeps wall tile values); the **client plays Wolf3D's level-complete intermission** (doors close → "LEVEL COMPLETED" + BJ + score count-up, render-only). No floor 2 — a demo keeps one immutable Map per Session; `ex_secretlevel` + multi-level flow deferred |
 | **M7** audio | ⬜ | digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas |
 | **M8** presentation shell | ⬜ | title / menu / "Get Psyched!" / level-intermission tally / episode flow |
 | **M9** MegaETH deployment | ⛔ | deploy to MegaETH testnet; fire-and-forget session-key play at ~native rate; end-to-end latency + gas (needs an RPC + funded key) |
@@ -130,7 +133,8 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | `kill_ss` | an SS (100 HP, 4-shot burst) chases, fires, and dies (221 tics) | 86.3k | 92.2k | 120.6k |
 | `dog_bite` | a dog (1 HP, fast, melee) rushes the player and leaps to bite (261 tics) | 87.0k | 89.6k | 116.1k |
 | `kill_officer` | an officer (50 HP, speed ×5, constant reaction) chases, fires, dies (171 tics) | 87.0k | 94.8k | 121.2k |
-| `level_exit` | walk into the elevator switch, end the level, sim freezes (41 tics) | 74.8k | 79.8k | 104.6k |
+| `level_exit` | walk into the elevator switch, end the level, sim freezes (41 tics) | 75.1k | 80.1k | 104.9k |
+| `multi_push` | push two secret walls; both slide at once (one finishes mid-slide of the other) (431 tics) | 89.4k | 100.9k | 144.5k |
 
 `submitInput` gas is the true per-input cost a player pays — ~75–135k with a live guard + door + items
 on the 16×16 test map, a fraction of a cent on a cheap L2 (the level-end **freeze** makes a completed
@@ -158,13 +162,13 @@ Per `DESIGN.md`: the C `sim_oracle` (carved from id's source) replays an input v
 per-tick **golden vectors**; the Rust harness deploys the contracts on anvil, replays the same
 inputs through `Session.submitInput`, and asserts the decoded state matches the golden vector
 **tic-by-tic** (player pose/health/ammo/weapon/bestweapon/keys/score, every guard field, every door's
-position/action/ticcount, every item's taken bit, obclass, the RNG index, and the `exit` latch — over
-single-guard, multi-guard, SS, dog, officer, area-localization, blocking-collision, weapon-switching,
-pushwall, and level-exit scenarios). All fifteen scenarios pass.
+position/action/ticcount, every item's taken bit, obclass, the RNG index, the `exit` latch, and every
+pushwall record — over single-guard, multi-guard, SS, dog, officer, area-localization, blocking-collision,
+weapon-switching, single- and multi-pushwall, and level-exit scenarios). All sixteen scenarios pass.
 
 The **wasm predictor is held to the same bar**: `oracle/verify_wasm.mjs` replays every golden
 scenario through `web/public/predict.wasm` and asserts its decoded packed state matches the golden
-vectors tic-by-tic (all fifteen pass). So the same carved C is differential-verified compiled
+vectors tic-by-tic (all sixteen pass). So the same carved C is differential-verified compiled
 two ways — natively (`sim_oracle`, the ground truth) and to wasm (the browser predictor) — and the
 client additionally reconciles each predicted tick against `Session.getState()` live.
 
@@ -213,11 +217,12 @@ anvil --silent &
 
 ## Next
 
-- **M6 🟡 in progress** — weapons & world completeness. Done: blocking-decoration collision (slice 1) ·
-  weapon roster + switching (slice 2) · pushwalls (slice 3) · **elevator + level exit** (slice 4 — the
-  switch ends the level, the sim freezes, and the client plays Wolf3D's level-complete intermission;
-  no floor 2 for a demo). Remaining M6 candidates: multi-pushwall + the sub-tile slide, and (if pursued)
-  `ex_secretlevel` / actual level→level flow — all deferred as a demo doesn't need them.
+- **M6 🟡 nearly done** — weapons & world completeness. Done: blocking-decoration collision (slice 1) ·
+  weapon roster + switching (slice 2) · pushwalls + **multi-pushwall** (slice 3 — a sparse list of
+  records, `map-extract` reads plane-1 `PUSHABLETILE`, E1L1's 5 secret walls all work) · **elevator +
+  level exit** (slice 4 — the switch ends the level, the sim freezes, and the client plays Wolf3D's
+  level-complete intermission; no floor 2 for a demo). Remaining (render polish, optional): the pushwall
+  **sub-tile slide** (`pwallpos`). `ex_secretlevel` / actual level→level flow stay out of scope (a demo).
 - **Gas**: state re-pack ✅ and SSTORE2 map ✅ are done; the remaining levers are per-actor
   packing (re-encoding every actor each tick) and capping live-actor count.
 - **M3**: dormant guards + line-of-sight ✅, doors ✅, pickups ✅ (ammo/health/keys/treasure, keys

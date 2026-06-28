@@ -304,7 +304,7 @@ type State = {
   doors: Door[];
   itemsTaken: boolean[];
   guards: Guard[];
-  pushwall: { sx: number; sy: number; dir: number; state: number; tile: number } | null;
+  pushwalls: { sx: number; sy: number; dir: number; state: number; tile: number }[]; // triggered secret walls
   exit: number; // exit_t @48: 0 still playing, 1 completed (elevator used → level over)
 };
 
@@ -358,13 +358,11 @@ function decode(hex: string): State {
     doors,
     itemsTaken,
     guards,
-    // pushwall: one trailing word after the actors when haspushwall@40 is set (M6)
-    pushwall: fld(header, 40, 1)
-      ? (() => {
-          const q = w[2 + ad + iw + n];
-          return { sx: fld(q, 0, 8), sy: fld(q, 8, 8), dir: fld(q, 16, 8), state: fld(q, 24, 16), tile: fld(q, 40, 8) };
-        })()
-      : null,
+    // pushwalls: numpushwalls@40 trailing words after the actors, one per triggered wall (M6)
+    pushwalls: Array.from({ length: fld(header, 40, 8) }, (_, i) => {
+      const q = w[2 + ad + iw + n + i];
+      return { sx: fld(q, 0, 8), sy: fld(q, 8, 8), dir: fld(q, 16, 8), state: fld(q, 24, 16), tile: fld(q, 40, 8) };
+    }),
     exit: fld(header, 48, 8), // level-end latch (elevator)
   };
 }
@@ -880,22 +878,22 @@ function drawScenery(px: number, py: number, pa: number, A: Assets) {
 }
 
 const PWDX = [0, 1, 0, -1], PWDY = [-1, 0, 1, 0]; // di_north, di_east, di_south, di_west
-// Reconstruct the moving pushwall into the live tilemap (mirrors Engine _applyPushwall,
-// tile-granular): reset the path to base, then crosses c=0..3 vacate start..start+(c-1)
-// and place the wall at start+c (+ start+c+1 while sliding). The TS raycaster + minimap
-// read `tiles` live; the wasm renderer's buffer is re-synced via the returned indices.
-// The sub-tile slide (pwallpos) isn't modeled — the wall relocates tile-by-tile.
+// Reconstruct every moving pushwall into the live tilemap (mirrors Engine _applyPushwall,
+// tile-granular): per record reset the path to base, then crosses c=0..3 vacate
+// start..start+(c-1) and place the wall at start+c (+ start+c+1 while sliding). The TS
+// raycaster + minimap read `tiles` live; the wasm renderer's buffer is re-synced via the
+// returned indices. The sub-tile slide (pwallpos) isn't modeled — walls relocate tile-by-tile.
 function applyPushwallOverlay(s: State): number[] {
-  const pw = s.pushwall;
-  if (!pw) return [];
   const changed: number[] = [];
-  const idx = (k: number) => (pw.sy + PWDY[pw.dir] * k) * W + (pw.sx + PWDX[pw.dir] * k);
-  const set = (k: number, v: number) => { const i = idx(k); if (i >= 0 && i < tiles.length) { tiles[i] = v; changed.push(i); } };
-  for (let k = 0; k <= 4; k++) set(k, baseTiles[idx(k)]); // reset the path to base
-  const c = pw.state === 0 ? 3 : Math.floor(pw.state / 128);
-  for (let k = 0; k < c; k++) set(k, 0); // vacated -> floor
-  set(c, pw.tile); // leading wall
-  if (c < 3) set(c + 1, pw.tile);
+  for (const pw of s.pushwalls) {
+    const idx = (k: number) => (pw.sy + PWDY[pw.dir] * k) * W + (pw.sx + PWDX[pw.dir] * k);
+    const set = (k: number, v: number) => { const i = idx(k); if (i >= 0 && i < tiles.length) { tiles[i] = v; changed.push(i); } };
+    for (let k = 0; k <= 4; k++) set(k, baseTiles[idx(k)]); // reset the path to base
+    const c = pw.state === 0 ? 3 : Math.floor(pw.state / 128);
+    for (let k = 0; k < c; k++) set(k, 0); // vacated -> floor
+    set(c, pw.tile); // leading wall
+    if (c < 3) set(c + 1, pw.tile);
+  }
   return changed;
 }
 

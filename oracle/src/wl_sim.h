@@ -180,11 +180,15 @@ extern int   health, playerdead;        /* gamestate.health; ex_died flag */
 extern int   playstate;                  /* exit_t: ex_stillplaying / ex_completed (elevator) */
 extern int   ammo, attackcount;         /* gamestate.ammo; fire cooldown */
 extern int   weapon, bestweapon;         /* gamestate.weapon/bestweapon (wp_*) */
-/* pushwall (WL_ACT1.C): one secret wall slides at a time. pwallstate 1->384 (3 tiles at
- * tics=1), pwallpos = (pwallstate/2)&63 is the render slide. pwall_active stays set once
- * triggered (the relocation is permanent). pushwallat[][] marks which walls are pushable. */
-extern int   pwallstate, pwallx, pwally, pwalldir, pwallpos;
-extern int   pwall_active, pwall_startx, pwall_starty, pwall_oldtile;
+/* pushwalls (WL_ACT1.C): secret walls. Each triggered wall is one record; several can be
+ * mid-slide at once (E1L1 has 5). pw_state 1->384 (3 tiles at tics=1), 0 once complete but the
+ * record persists (the relocation is permanent). pw_curx/y is the moving leading tile (for the
+ * oracle's incremental tilemap mutation). pushwallat[][] marks which walls are pushable; a tile's
+ * marker is cleared when it's triggered, which is what prevents re-triggering it (no global guard). */
+#define MAXPWALLS 16
+extern int   pwall_count;
+extern int   pw_startx[MAXPWALLS], pw_starty[MAXPWALLS], pw_dir[MAXPWALLS];
+extern int   pw_state[MAXPWALLS], pw_oldtile[MAXPWALLS], pw_curx[MAXPWALLS], pw_cury[MAXPWALLS];
 extern unsigned char pushwallat[MAPSIZE][MAPSIZE];
 void MovePWalls(void);
 extern int   madenoise;                 /* player fired this tic (alerts guards) */
