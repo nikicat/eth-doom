@@ -27,6 +27,11 @@ interface IMap {
     function itemsPtr() external view returns (address);
     /// @notice SSTORE2 pointer for the blockers list (STOP byte + 2 bytes each), read each tick.
     function blockersPtr() external view returns (address);
+    /// @notice Pushable secret walls (WL_ACT1.C PUSHABLETILE), 2 bytes each: tilex, tiley.
+    /// The tilemap marks them as solid walls; Cmd_Use against one slides it (PushWall).
+    function pushwalls() external view returns (bytes memory);
+    /// @notice SSTORE2 pointer for the pushwalls list (STOP byte + 2 bytes each), read each tick.
+    function pushwallsPtr() external view returns (address);
     /// @notice SSTORE2 pointer for the per-tile area map (STOP byte + width*height area
     /// bytes), or address(0)/empty when the level is a single area. Drives sound
     /// localization: gunfire only alerts guards in areas connected to the player's.

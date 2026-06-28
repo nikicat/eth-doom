@@ -21,7 +21,7 @@ contract SessionFactoryTest is Test {
                 if (x == 0 || y == 0 || x == 3 || y == 3) tiles[y * 4 + x] = 0x01;
             }
         }
-        map = new Map(4, 4, tiles, 1, 1, 1, "", "", "", "", ""); // no guards/doors/items/areas/blockers
+        map = new Map(4, 4, tiles, 1, 1, 1, "", "", "", "", "", ""); // no guards/doors/items/areas/blockers/pushwalls
         factory = new SessionFactory();
     }
 

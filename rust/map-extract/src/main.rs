@@ -316,6 +316,10 @@ fn main() -> Result<()> {
     let doors_flat = flat(&doors.iter().map(|d| d.to_vec()).collect::<Vec<_>>());
     let items_flat = flat(&items.iter().map(|i| i.to_vec()).collect::<Vec<_>>());
     let blockers_flat = flat(&blockers.iter().map(|b| b.to_vec()).collect::<Vec<_>>());
+    // pushable secret walls (plane-1 PUSHABLETILE) — extraction is a follow-up (the on-chain
+    // sim supports one pushwall per session); emit an empty list so the key always exists.
+    let pushwalls: Vec<[u8; 2]> = Vec::new();
+    let pushwalls_flat = flat(&pushwalls.iter().map(|b| b.to_vec()).collect::<Vec<_>>());
 
     // per-tile area number for sound localization: plane-0 floor codes >= AREATILE encode
     // the area (tile - AREATILE); walls/doors get 0 (the engine fixes up door tiles).
@@ -332,6 +336,7 @@ fn main() -> Result<()> {
         "items": items,             // [tilex, tiley, itemnumber] per bonus item
         "scenery": scenery,         // [tilex, tiley, sprite] decorative statics (client billboards; off-chain)
         "blockers": blockers,       // [tilex, tiley] blocking statics (on-chain collision) — M6
+        "pushwalls": pushwalls,     // [tilex, tiley] pushable secret walls (empty until extracted) — M6
         "areas": areas,             // per-tile area number (sound localization via ConnectAreas)
         // flat-bytes mirror of the arrays above, for script/Deploy.s.sol:
         "tilesHex": to_hex(&tiles),
@@ -340,6 +345,7 @@ fn main() -> Result<()> {
         "itemsHex": to_hex(&items_flat),
         "areasHex": to_hex(&areas),
         "blockersHex": to_hex(&blockers_flat),
+        "pushwallsHex": to_hex(&pushwalls_flat),
     });
     if let Some(dir) = args.out.parent() {
         fs::create_dir_all(dir)?;

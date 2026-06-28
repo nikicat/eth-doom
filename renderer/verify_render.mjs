@@ -40,7 +40,9 @@ function loadTiles(mapFile) {
     const row = lines[1 + y] ?? "";
     for (let x = 0; x < w; x++) {
       const c = row[x] ?? ".";
-      if (c === "#") tiles[y * w + x] = 1;
+      // 'P' is a (pushable) wall — rendered static here; the pushwall slide overlay is a
+      // deferred client feature, so T3 pins wolfrender's output for the unmoved wall.
+      if (c === "#" || c === "P") tiles[y * w + x] = 1;
       else if (c === "D" || c === "d") tiles[y * w + x] = 0x80 | doornum++;
     }
   }

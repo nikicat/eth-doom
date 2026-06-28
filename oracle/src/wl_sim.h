@@ -63,6 +63,9 @@ enum {
 /* WL_DEF.H weapontype. Ownership is contiguous wp_knife..bestweapon (CheckWeaponChange). */
 enum { wp_knife, wp_pistol, wp_machinegun, wp_chaingun };
 
+/* WL_DEF.H controldir_t — the cardinal a pushwall slides toward (= the Use direction). */
+enum { di_north, di_east, di_south, di_west };
+
 /* --- enemy AI constants (WL_DEF.H / WL_STATE.C) --- */
 #define UNSIGNEDSHIFT 8           /* 1/256-tile precision */
 #define SPDPATROL     512L        /* guard patrol speed; chase = *3 */
@@ -171,6 +174,13 @@ extern long  thrustspeed;               /* total player thrust this tic (T_Shoot
 extern int   health, playerdead;        /* gamestate.health; ex_died flag */
 extern int   ammo, attackcount;         /* gamestate.ammo; fire cooldown */
 extern int   weapon, bestweapon;         /* gamestate.weapon/bestweapon (wp_*) */
+/* pushwall (WL_ACT1.C): one secret wall slides at a time. pwallstate 1->384 (3 tiles at
+ * tics=1), pwallpos = (pwallstate/2)&63 is the render slide. pwall_active stays set once
+ * triggered (the relocation is permanent). pushwallat[][] marks which walls are pushable. */
+extern int   pwallstate, pwallx, pwally, pwalldir, pwallpos;
+extern int   pwall_active, pwall_startx, pwall_starty, pwall_oldtile;
+extern unsigned char pushwallat[MAPSIZE][MAPSIZE];
+void MovePWalls(void);
 extern int   madenoise;                 /* player fired this tic (alerts guards) */
 
 extern objtype  playerent;

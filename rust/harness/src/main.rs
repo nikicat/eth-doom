@@ -52,6 +52,7 @@ struct Snap {
     score: i64,
     weapon: i64,
     bestweapon: i64,
+    pwall: Option<[i64; 5]>, // sx, sy, dir, state, tile (None = no pushwall triggered)
 }
 
 fn load_golden(path: &str) -> Result<Vec<Snap>> {
@@ -90,6 +91,10 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
             score: v.get("score").and_then(|x| x.as_i64()).unwrap_or(0),
             weapon: v.get("weapon").and_then(|x| x.as_i64()).unwrap_or(1),
             bestweapon: v.get("bestweapon").and_then(|x| x.as_i64()).unwrap_or(1),
+            pwall: v.get("pwall").map(|p| {
+                let f = |k: &str| p[k].as_i64().unwrap();
+                [f("sx"), f("sy"), f("dir"), f("state"), f("tile")]
+            }),
         });
     }
     Ok(out)
@@ -99,7 +104,7 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
 /// wall, `doornum|0x80` = door, 0 = floor. Door chars match the oracle map loader
 /// ('D' vertical, 'd' horizontal, lock 0), with doornum in y-major scan order, and
 /// also returns the Map door bytes (3/door: tilex, tiley, vertical|lock<<1).
-fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
+fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
     let txt = fs::read_to_string(repo(path))?;
     let mut lines = txt.lines();
     let hdr = lines.next().ok_or_else(|| anyhow!("empty map"))?;
@@ -111,6 +116,7 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>,
     let mut doors = Vec::new();
     let mut items = Vec::new();
     let mut blockers = Vec::new(); // 'B' blocking decorations (2 bytes each: tilex, tiley)
+    let mut pushwalls = Vec::new(); // 'P' pushable secret walls (2 bytes each: tilex, tiley)
     let mut doornum: u8 = 0;
     for y in 0..h {
         let row = lines.next().ok_or_else(|| anyhow!("map too short"))?;
@@ -133,6 +139,7 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>,
                 b't' => items.extend_from_slice(&item(10)), // bo_cross
                 b'm' => items.extend_from_slice(&item(16)), // bo_machinegun
                 b'g' => items.extend_from_slice(&item(17)), // bo_chaingun
+                b'P' => { tiles[(y * w + x) as usize] = 1; pushwalls.extend_from_slice(&[x as u8, y as u8]); } // pushable secret wall
                 b'B' => blockers.extend_from_slice(&[x as u8, y as u8]), // blocking decoration
                 b'0'..=b'9' => areas[(y * w + x) as usize] = c - b'0', // floor, explicit area
                 _ => {}
@@ -143,7 +150,7 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>,
     if areas.iter().all(|&a| a == 0) {
         areas.clear();
     }
-    Ok((w, h, tiles, doors, items, areas, blockers))
+    Ok((w, h, tiles, doors, items, areas, blockers, pushwalls))
 }
 
 /// Parse "cx cy buttons" lines (skip blank / '#').
@@ -250,6 +257,24 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
             bail!("tic {tick} GUARD{k} mismatch\n  got  {:?}\n  want {:?}", got, want.guards[k]);
         }
     }
+
+    // pushwall: one trailing word after the actors when haspushwall@40 is set
+    let has_pwall = field(header, 40, 1) == 1;
+    let got_pwall = if has_pwall {
+        let pw = word(state, 2 + ad + iw + n);
+        Some([
+            field(pw, 0, 8) as i64,  // sx
+            field(pw, 8, 8) as i64,  // sy
+            field(pw, 16, 8) as i64, // dir
+            field(pw, 24, 16) as i64, // state
+            field(pw, 40, 8) as i64, // tile
+        ])
+    } else {
+        None
+    };
+    if got_pwall != want.pwall {
+        bail!("tic {tick} PUSHWALL mismatch\n  got  {:?}\n  want {:?}", got_pwall, want.pwall);
+    }
     Ok(())
 }
 
@@ -316,7 +341,7 @@ async fn main() -> Result<()> {
     let engine = eng::Engine::deploy(provider.clone()).await?;
 
     for sc in &discover_scenarios()? {
-        let (w, h, tiles, doors, items, areas, blockers) = load_map(&sc.map)?;
+        let (w, h, tiles, doors, items, areas, blockers, pushwalls) = load_map(&sc.map)?;
         let inputs = load_inputs(&sc.input)?;
         let golden = load_golden(&sc.golden)?;
         let (sx, sy, sdir) = sc.spawn;
@@ -330,6 +355,7 @@ async fn main() -> Result<()> {
             Bytes::from(items),
             Bytes::from(areas),
             Bytes::from(blockers),
+            Bytes::from(pushwalls),
         ).await?;
         let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address(), Address::ZERO).await?;
 
@@ -382,6 +408,7 @@ async fn main() -> Result<()> {
         guards.truncate(12 * 4); // match the client's MAX_GUARDS cap
         let (doors, items) = (triplet("doors", 3), triplet("items", 3));
         let blockers = triplet("blockers", 2); // blocking decorations (2 bytes each) — M6
+        let pushwalls = triplet("pushwalls", 2); // pushable secret walls (2 bytes each) — M6 (empty until map-extract emits them)
         let areas: Vec<u8> = level["areas"].as_array()
             .map(|a| a.iter().map(|v| v.as_u64().unwrap() as u8).collect()).unwrap_or_default();
         let (ng, nd, ni) = (guards.len() / 4, doors.len() / 3, items.len() / 3);
@@ -390,7 +417,7 @@ async fn main() -> Result<()> {
             provider.clone(), U256::from(w), U256::from(h), Bytes::from(tiles),
             U256::from(sx), U256::from(sy), U256::from(sdir),
             Bytes::from(guards), Bytes::from(doors), Bytes::from(items),
-            Bytes::from(areas), Bytes::from(blockers),
+            Bytes::from(areas), Bytes::from(blockers), Bytes::from(pushwalls),
         ).await?;
         let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address(), Address::ZERO).await?;
 
@@ -414,7 +441,7 @@ async fn main() -> Result<()> {
             provider.clone(), U256::from(w), U256::from(h),
             Bytes::from(level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
             U256::from(sx), U256::from(sy), U256::from(sdir),
-            Bytes::new(), Bytes::from(triplet("doors", 3)), Bytes::from(triplet("items", 3)), Bytes::new(), Bytes::new(),
+            Bytes::new(), Bytes::from(triplet("doors", 3)), Bytes::from(triplet("items", 3)), Bytes::new(), Bytes::new(), Bytes::new(),
         ).await?;
         let s0 = sess::Session::deploy(provider.clone(), *engine.address(), *map0.address(), Address::ZERO).await?;
         let st0 = s0.getState().call().await?;
@@ -426,7 +453,7 @@ async fn main() -> Result<()> {
         let mapb = mp::Map::deploy(
             provider.clone(), U256::from(w), U256::from(h),
             Bytes::from(level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
-            U256::from(sx), U256::from(sy), U256::from(sdir), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+            U256::from(sx), U256::from(sy), U256::from(sdir), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
         ).await?;
         let sb = sess::Session::deploy(provider.clone(), *engine.address(), *mapb.address(), Address::ZERO).await?;
         let stb = sb.getState().call().await?;

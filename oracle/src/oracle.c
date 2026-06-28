@@ -45,6 +45,9 @@ static void emit(long tick)
         printf("]");
     }
     printf(",\"keys\":%d,\"score\":%ld", keys, score);
+    if (pwall_active)
+        printf(",\"pwall\":{\"sx\":%d,\"sy\":%d,\"dir\":%d,\"state\":%d,\"tile\":%d}",
+               pwall_startx, pwall_starty, pwalldir, pwallstate, pwall_oldtile);
     printf("}\n");
 }
 
@@ -76,6 +79,7 @@ static void load_map(const char *path)
             else if (c == 't') SpawnStatic(x, y, bo_cross);    /* treasure */
             else if (c == 'm') SpawnStatic(x, y, bo_machinegun); /* machine gun pickup */
             else if (c == 'g') SpawnStatic(x, y, bo_chaingun);   /* chaingun pickup */
+            else if (c == 'P') { tilemap[x][y] = 1; pushwallat[x][y] = 1; } /* pushable secret wall */
             else if (c == 'B') blockmap[x][y] = 1;             /* blocking decoration (barrel/table/…) */
             else if (c >= '0' && c <= '9') areamap[x][y] = c - '0'; /* floor, explicit area */
             /* else: floor, area 0 ('.', ' ') */
@@ -141,6 +145,7 @@ int main(int argc, char **argv)
         /* WL_PLAY.C PlayLoop order: MoveDoors, then the player's T_Player
          * (ControlMovement + Cmd_Use + weapon), then every actor's DoActor. */
         MoveDoors();
+        MovePWalls();
         ControlMovement(player);
         plux = player->x >> UNSIGNEDSHIFT;
         pluy = player->y >> UNSIGNEDSHIFT;

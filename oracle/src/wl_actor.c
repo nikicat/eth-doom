@@ -25,6 +25,13 @@ int      madenoise;      /* player fired this tic (alerts guards in the area) */
  * non-closed doors joining areas a and b; areabyplayer[a] = a reachable from the player's
  * area through open doors. Gunfire (madenoise) only alerts guards where areabyplayer is set. */
 unsigned char areamap[MAPSIZE][MAPSIZE];
+
+/* pushwall state (WL_ACT1.C). pwall_active stays set once a wall is pushed (permanent). */
+int pwallstate, pwallx, pwally, pwalldir, pwallpos;
+int pwall_active, pwall_startx, pwall_starty, pwall_oldtile;
+unsigned char pushwallat[MAPSIZE][MAPSIZE];
+static const int pwdx[4] = {0, 1, 0, -1}; /* di_north, di_east, di_south, di_west */
+static const int pwdy[4] = {-1, 0, 1, 0};
 static unsigned char areaconnect[NUMAREAS][NUMAREAS];
 static unsigned char areabyplayer[NUMAREAS];
 
@@ -515,23 +522,81 @@ void MoveDoors(void) {
         }
 }
 
+/* Is tile (x,y) occupied by the player or a live actor? Replaces id's actorat grid
+ * for the pushwall block-check (a wall can't be pushed into an occupied tile). */
+static int ActorOnTile(int x, int y) {
+    if (player->tilex == x && player->tiley == y) return 1;
+    for (int i = 0; i < numenemies; i++)
+        if ((enemies[i].flags & FL_SHOOTABLE) && enemies[i].tilex == x && enemies[i].tiley == y)
+            return 1;
+    return 0;
+}
+
+/* WL_ACT1.C PushWall — start a secret wall sliding toward `dir`. One pushwall moves at a
+ * time; the first destination tile must be clear. id's 0xc0 render marker is dropped — a
+ * relocated wall is a plain solid tile (the sim cares only solid-vs-floor; the sub-tile
+ * slide visual is client-side). */
+static void PushWall(int checkx, int checky, int dir) {
+    if (pwall_active) return;                  /* slice 3: one pushwall per session (single record) */
+    int oldtile = tilemap[checkx][checky];
+    if (!oldtile) return;
+    int nx = checkx + pwdx[dir], ny = checky + pwdy[dir];
+    if (ActorOnTile(nx, ny)) return;           /* NOWAY: blocked */
+    tilemap[nx][ny] = oldtile;                 /* the wall extends into the destination */
+    pwall_active = 1;
+    pwall_startx = pwallx = checkx;
+    pwall_starty = pwally = checky;
+    pwalldir = dir;
+    pwall_oldtile = oldtile;
+    pwallstate = 1;
+    pwallpos = 0;
+    pushwallat[checkx][checky] = 0;            /* clear the P marker (no re-trigger) */
+}
+
+/* WL_ACT1.C MovePWalls — advance the active pushwall one tic. Each 128-unit block
+ * crossing relocates the wall one tile (the trailing tile becomes floor in the player's
+ * area); it stops once pwallstate passes 256 (with tics=1 that's a 3-tile slide; id's
+ * "two tiles" assumes tics>1). The mid-slide actor block-check (id aborts) is dropped —
+ * scenarios keep the path clear (a documented slice-3 limitation). */
+void MovePWalls(void) {
+    if (!pwallstate) return;
+    int oldblock = pwallstate / 128;
+    pwallstate += 1;                           /* tics = 1 */
+    if (pwallstate / 128 != oldblock) {
+        tilemap[pwallx][pwally] = 0;           /* trailing tile -> floor */
+        areamap[pwallx][pwally] = player->areanumber;
+        if (pwallstate > 256) { pwallstate = 0; return; } /* slide complete */
+        pwallx += pwdx[pwalldir];
+        pwally += pwdy[pwalldir];
+        tilemap[pwallx][pwally] = pwall_oldtile;                          /* leading tile */
+        tilemap[pwallx + pwdx[pwalldir]][pwally + pwdy[pwalldir]] = pwall_oldtile; /* +1 ahead */
+    }
+    pwallpos = (pwallstate / 2) & 63;
+}
+
 /* WL_AGENT.C Cmd_Use — operate the door the player faces (edge-triggered via
  * useheld). Elevator + pushwall paths dropped (no exit/secret in this scope). */
 void Cmd_Use(int buttons) {
-    int checkx, checky, doortile;
+    int checkx, checky, dir, doortile;
 
     if (!((buttons >> bt_use) & 1)) { useheld = 0; return; }
-    if (useheld) return;
 
     if (player->angle < ANGLES / 8 || player->angle > 7 * ANGLES / 8) {
-        checkx = player->tilex + 1; checky = player->tiley;
+        checkx = player->tilex + 1; checky = player->tiley;     dir = di_east;
     } else if (player->angle < 3 * ANGLES / 8) {
-        checkx = player->tilex;     checky = player->tiley - 1;
+        checkx = player->tilex;     checky = player->tiley - 1; dir = di_north;
     } else if (player->angle < 5 * ANGLES / 8) {
-        checkx = player->tilex - 1; checky = player->tiley;
+        checkx = player->tilex - 1; checky = player->tiley;     dir = di_west;
     } else {
-        checkx = player->tilex;     checky = player->tiley + 1;
+        checkx = player->tilex;     checky = player->tiley + 1; dir = di_south;
     }
+    /* pushwall: triggers regardless of the useheld latch (PushWall guards re-entry via
+     * pwallstate + the cleared marker), exactly like id checking PUSHABLETILE first. */
+    if (pushwallat[checkx][checky]) {
+        PushWall(checkx, checky, dir);
+        return;
+    }
+    if (useheld) return;
     doortile = tilemap[checkx][checky];
     if (doortile & 0x80) {
         useheld = 1;

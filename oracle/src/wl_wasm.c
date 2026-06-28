@@ -64,9 +64,11 @@ EXPORT void reset(void) {
     bestweapon = wp_pistol;
     attackcount = 0;
     playerdead = 0;
+    pwallstate = pwall_active = pwallpos = 0;
     memset(tilemap, 0, sizeof tilemap);
     memset(areamap, 0, sizeof areamap);
     memset(blockmap, 0, sizeof blockmap);
+    memset(pushwallat, 0, sizeof pushwallat);
     InitDoorList();
     InitStaticList();
 }
@@ -91,6 +93,7 @@ EXPORT void setup_tile(int x, int y, int ch) {
         case 't': SpawnStatic(x, y, bo_cross); break;
         case 'm': SpawnStatic(x, y, bo_machinegun); break;
         case 'g': SpawnStatic(x, y, bo_chaingun); break;
+        case 'P': tilemap[x][y] = 1; pushwallat[x][y] = 1; break; /* pushable secret wall */
         case 'B': blockmap[x][y] = 1; break; /* blocking decoration */
         default: if (ch >= '0' && ch <= '9') areamap[x][y] = ch - '0'; break; /* floor / area digit */
     }
@@ -109,6 +112,7 @@ EXPORT void step(int cx, int cy, int btns) {
     controly = cy;
     for (int b = 0; b < NUMBUTTONS; b++) buttonstate[b] = (btns >> b) & 1;
     MoveDoors();
+    MovePWalls();
     ControlMovement(player);
     plux = player->x >> UNSIGNEDSHIFT;
     pluy = player->y >> UNSIGNEDSHIFT;
@@ -135,15 +139,17 @@ EXPORT int read_state(void) {
     int ad = 0;
     for (int i = 0; i < nd; i++)
         if (doorobjlist[i].action != dr_closed) ad++;
-    int nwords = 2 + ad + iw + na;
+    int hp = pwall_active ? 1 : 0; /* one trailing pushwall word once triggered */
+    int nwords = 2 + ad + iw + na + hp;
     unsigned char *out = g_state;
     memset(out, 0, 32 * nwords);
 
-    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 */
+    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 | haspushwall@40 */
     put(out, 0, 8, rndindex & 0xff);
     put(out, 8, 8, na & 0xff);
     put(out, 16, 8, ad & 0xff);
     put(out, 24, 16, ni & 0xffff);
+    put(out, 40, 1, hp);
 
     /* player word */
     unsigned char *pw = out + 32;
@@ -200,6 +206,16 @@ EXPORT int read_state(void) {
         put(aw, 176, 32, (unsigned int)a->speed);
         put(aw, 208, 8, a->active);
         put(aw, 216, 16, (unsigned int)a->temp2);
+    }
+
+    /* trailing pushwall word (if triggered): sx@0 | sy@8 | dir@16 | state@24 | tile@40 */
+    if (hp) {
+        unsigned char *pww = out + 32 * (2 + ad + iw + na);
+        put(pww, 0, 8, pwall_startx & 0xff);
+        put(pww, 8, 8, pwall_starty & 0xff);
+        put(pww, 16, 8, pwalldir & 0xff);
+        put(pww, 24, 16, pwallstate & 0xffff);
+        put(pww, 40, 8, pwall_oldtile & 0xff);
     }
     return 32 * nwords;
 }

@@ -41,6 +41,11 @@ contract Engine {
     uint256 internal constant WP_PISTOL = 1;
     uint256 internal constant WP_MACHINEGUN = 2;
     uint256 internal constant WP_CHAINGUN = 3;
+    // WL_DEF.H controldir_t — pushwall slide direction (= the Use direction).
+    uint256 internal constant DI_NORTH = 0;
+    uint256 internal constant DI_EAST = 1;
+    uint256 internal constant DI_SOUTH = 2;
+    uint256 internal constant DI_WEST = 3;
 
     // --- doors (WL_ACT1.C / WL_DEF.H) ---
     uint256 internal constant OPENTICS = 300;
@@ -199,6 +204,16 @@ contract Engine {
         uint256[] itemTaken; // dynamic: bit i = item i taken (ceil(numItems/256) words)
         uint256 numItems;
         bytes blockers; // static: 2 bytes/blocker (tilex, tiley) — blocking decorations (M6)
+        bytes pushwalls; // static: 2 bytes/pushable-wall (tilex, tiley) — secret walls (M6)
+        // dynamic pushwall record (single, M6): one secret wall slides at a time, the
+        // relocation permanent. pwActive stays set once triggered; pwState 0..384 (0 with
+        // pwActive=1 == complete). The Engine reconstructs the effective tilemap from these.
+        uint256 pwActive;
+        uint256 pwStartX;
+        uint256 pwStartY;
+        uint256 pwDir;
+        uint256 pwState;
+        uint256 pwTile; // the wall's texture (oldtile = Map tile at the start)
         uint256 rndindex;
         bytes tiles;
         uint256 w;
@@ -255,11 +270,15 @@ contract Engine {
 
         // seed area connectivity from the loaded state (player area + non-closed doors)
         wd.playerArea = _area(wd, wd.p.tilex, wd.p.tiley);
+        // reconstruct the effective tilemap from the packed pushwall record (M6) before
+        // connectivity (vacated tiles join the player's area) and any movement/sight.
+        _applyPushwall(wd);
         _connectAreas(wd);
 
-        // WL_PLAY.C PlayLoop order: MoveDoors, then the player's T_Player
+        // WL_PLAY.C PlayLoop order: MoveDoors, MovePWalls, then the player's T_Player
         // (ControlMovement + Cmd_Use + weapon), then every actor's DoActor.
         _moveDoors(wd);
+        _movePWalls(wd);
         _controlMovement(wd, cmd);
         wd.plux = wd.p.x >> 8; // UNSIGNEDSHIFT
         wd.pluy = wd.p.y >> 8;
@@ -318,6 +337,11 @@ contract Engine {
         // their floor tile solid for movement (player TryMove + enemy TryWalk), checked in
         // _actorTile. Immutable, so no packed state — read from the Map each tick like items.
         wd.blockers = _readPtr(IMap(map).blockersPtr());
+
+        // pushable secret walls (M6): raw static bytes (2/wall: tilex, tiley). The tilemap
+        // marks them solid; Cmd_Use against one slides it. The dynamic pushwall record is in
+        // the packed state; _applyPushwall reconstructs the relocated tilemap each tick.
+        wd.pushwalls = _readPtr(IMap(map).pushwallsPtr());
 
         // per-tile area map (WL_ACT1.C). Empty => single area 0. Apply SpawnDoor's
         // fixup: a door tile takes a side neighbor's area (`*map = *(map-1)`), so an
@@ -626,32 +650,129 @@ contract Engine {
             wd.p.useheld = 0;
             return;
         }
-        if (wd.p.useheld != 0) return;
 
         int256 cx;
         int256 cy;
+        uint256 dir;
         int256 angle = wd.p.angle;
         int256 ptx = int256(wd.p.tilex);
         int256 pty = int256(wd.p.tiley);
         if (angle < ANGLES / 8 || angle > 7 * ANGLES / 8) {
             cx = ptx + 1;
             cy = pty;
+            dir = DI_EAST;
         } else if (angle < 3 * ANGLES / 8) {
             cx = ptx;
             cy = pty - 1;
+            dir = DI_NORTH;
         } else if (angle < 5 * ANGLES / 8) {
             cx = ptx - 1;
             cy = pty;
+            dir = DI_WEST;
         } else {
             cx = ptx;
             cy = pty + 1;
+            dir = DI_SOUTH;
         }
         if (cx < 0 || cx >= int256(wd.w) || cy < 0 || cy >= int256(wd.h)) return;
+        // pushwall: triggers regardless of the useheld latch (one per session, slice 3),
+        // exactly like id checking PUSHABLETILE before the door. _pushWall guards re-entry.
+        if (wd.pwActive == 0 && _isPushwall(wd, cx, cy)) {
+            _pushWall(wd, cx, cy, dir);
+            return;
+        }
+        if (wd.p.useheld != 0) return;
         uint256 doortile = _tile(wd, uint256(cy) * wd.w + uint256(cx));
         if (doortile & 0x80 != 0) {
             wd.p.useheld = 1;
             _operateDoor(wd, doortile & 0x7f);
         }
+    }
+
+    // ---------------- pushwalls (WL_ACT1.C) ----------------
+    // The Map tilemap is immutable, but pushwalls relocate it. The oracle mutates its
+    // tilemap directly; the Engine reconstructs the effective tilemap each tick from the
+    // packed pushwall record via _applyPushwall (idempotent). With tics=1 a wall slides 3
+    // tiles (id's "two tiles" assumes tics>1). The mid-slide actor block-check is dropped
+    // (scenarios keep the path clear); only the trigger checks the first destination tile.
+
+    function _pwDX(uint256 dir) internal pure returns (int256) {
+        return dir == DI_EAST ? int256(1) : (dir == DI_WEST ? -int256(1) : int256(0));
+    }
+
+    function _pwDY(uint256 dir) internal pure returns (int256) {
+        return dir == DI_SOUTH ? int256(1) : (dir == DI_NORTH ? -int256(1) : int256(0));
+    }
+
+    /// Is tile (x,y) in the Map's pushable-wall list?
+    function _isPushwall(World memory wd, int256 x, int256 y) internal pure returns (bool) {
+        bytes memory p = wd.pushwalls;
+        for (uint256 i = 0; i < p.length; i += 2) {
+            if (int256(uint256(uint8(p[i]))) == x && int256(uint256(uint8(p[i + 1]))) == y) return true;
+        }
+        return false;
+    }
+
+    /// Is tile (x,y) occupied by the player or a live actor? (replaces id's actorat grid)
+    function _actorOnTile(World memory wd, int256 x, int256 y) internal pure returns (bool) {
+        if (int256(wd.p.tilex) == x && int256(wd.p.tiley) == y) return true;
+        for (uint256 i = 0; i < wd.actors.length; i++) {
+            Actor memory a = wd.actors[i];
+            if ((a.flags & FL_SHOOTABLE) != 0 && int256(a.tilex) == x && int256(a.tiley) == y) return true;
+        }
+        return false;
+    }
+
+    /// Set the effective tile (x,y); a vacated (floor) tile joins the player's area.
+    function _setTile(World memory wd, int256 x, int256 y, uint256 val, bool vacate) internal pure {
+        if (x < 0 || x >= int256(wd.w) || y < 0 || y >= int256(wd.h)) return;
+        uint256 idx = uint256(y) * wd.w + uint256(x);
+        wd.tiles[idx] = bytes1(uint8(val));
+        if (vacate && wd.areas.length != 0) wd.areas[idx] = bytes1(uint8(wd.playerArea));
+    }
+
+    /// Reconstruct the effective tilemap for the current pushwall record (idempotent).
+    /// crosses c = 0..3: tiles start..start+(c-1) are vacated (floor); the wall is solid at
+    /// start+c (+ start+c+1 while still sliding), or just start+3 once complete (pwState 0).
+    function _applyPushwall(World memory wd) internal pure {
+        if (wd.pwActive == 0) return;
+        uint256 c = wd.pwState == 0 ? 3 : wd.pwState / 128;
+        int256 dx = _pwDX(wd.pwDir);
+        int256 dy = _pwDY(wd.pwDir);
+        int256 sx = int256(wd.pwStartX);
+        int256 sy = int256(wd.pwStartY);
+        for (uint256 k = 0; k < c; k++) {
+            _setTile(wd, sx + dx * int256(k), sy + dy * int256(k), 0, true); // vacated -> floor
+        }
+        _setTile(wd, sx + dx * int256(c), sy + dy * int256(c), wd.pwTile, false); // leading wall
+        if (c < 3) _setTile(wd, sx + dx * int256(c + 1), sy + dy * int256(c + 1), wd.pwTile, false);
+    }
+
+    /// WL_ACT1.C PushWall — start a secret wall sliding. One per session (slice 3); the
+    /// first destination tile must be clear of actors.
+    function _pushWall(World memory wd, int256 cx, int256 cy, uint256 dir) internal pure {
+        uint256 oldtile = _tile(wd, uint256(cy) * wd.w + uint256(cx));
+        if (oldtile == 0) return;
+        int256 nx = cx + _pwDX(dir);
+        int256 ny = cy + _pwDY(dir);
+        if (nx < 0 || nx >= int256(wd.w) || ny < 0 || ny >= int256(wd.h)) return;
+        if (_actorOnTile(wd, nx, ny)) return; // NOWAY: blocked
+        wd.pwActive = 1;
+        wd.pwStartX = uint256(cx);
+        wd.pwStartY = uint256(cy);
+        wd.pwDir = dir;
+        wd.pwState = 1;
+        wd.pwTile = oldtile;
+        _applyPushwall(wd); // extend the wall into the destination tile
+    }
+
+    /// WL_ACT1.C MovePWalls — advance the active pushwall one tic, then re-reconstruct.
+    function _movePWalls(World memory wd) internal pure {
+        if (wd.pwActive == 0 || wd.pwState == 0) return; // inactive or slide complete
+        uint256 oldblock = wd.pwState / 128;
+        wd.pwState += 1; // tics = 1
+        if (wd.pwState / 128 != oldblock && wd.pwState > 256) wd.pwState = 0; // slide complete
+        _applyPushwall(wd);
     }
 
     // ---------------- pickups (WL_AGENT.C GetBonus) ----------------
@@ -1537,6 +1658,8 @@ contract Engine {
 
     // --- state codec: header + player + active-door words + item bitmask + actor words ---
     // header: rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24
+    //         | haspushwall:bit@40  (1 => one trailing pushwall word after the actors:
+    //         startx:uint8@0 | starty:uint8@8 | dir:uint8@16 | pwstate:uint16@24 | tile:uint8@40)
     // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
     //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 |
     //         useheld:bit@176 | keys:uint8@184 | score:uint32@192 | weapon:uint8@224 |
@@ -1559,9 +1682,10 @@ contract Engine {
         for (uint256 i = 0; i < nd; i++) {
             if (wd.doors[i].action != DR_CLOSED) ad++;
         }
-        out = new bytes(32 * (2 + ad + iw + na));
-        uint256 header =
-            (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((ad & 0xff) << 16) | ((ni & 0xffff) << 24);
+        uint256 hp = wd.pwActive == 0 ? 0 : 1; // one trailing pushwall word once triggered
+        out = new bytes(32 * (2 + ad + iw + na + hp));
+        uint256 header = (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((ad & 0xff) << 16)
+            | ((ni & 0xffff) << 24) | (hp << 40);
         uint256 pw = _packPlayer(wd.p);
         assembly {
             mstore(add(out, 0x20), header)
@@ -1586,6 +1710,14 @@ contract Engine {
             uint256 aw = _packActor(wd.actors[i]);
             assembly {
                 mstore(add(add(out, 0x60), mul(add(add(ad, iw), i), 0x20)), aw)
+            }
+        }
+        if (hp != 0) {
+            // pushwall word after the actors: sx@0 | sy@8 | dir@16 | state@24 | tile@40
+            uint256 pww = (wd.pwStartX & 0xff) | ((wd.pwStartY & 0xff) << 8) | ((wd.pwDir & 0xff) << 16)
+                | ((wd.pwState & 0xffff) << 24) | ((wd.pwTile & 0xff) << 40);
+            assembly {
+                mstore(add(add(out, 0x60), mul(add(add(ad, iw), na), 0x20)), pww)
             }
         }
     }
@@ -1627,6 +1759,18 @@ contract Engine {
                 aw := calldataload(add(b.offset, add(0x40, mul(add(add(ad, iw), i), 0x20))))
             }
             wd.actors[i] = _unpackActor(aw);
+        }
+        if ((header >> 40) & 1 != 0) {
+            uint256 pww;
+            assembly {
+                pww := calldataload(add(b.offset, add(0x40, mul(add(add(ad, iw), na), 0x20))))
+            }
+            wd.pwActive = 1;
+            wd.pwStartX = pww & 0xff;
+            wd.pwStartY = (pww >> 8) & 0xff;
+            wd.pwDir = (pww >> 16) & 0xff;
+            wd.pwState = (pww >> 24) & 0xffff;
+            wd.pwTile = (pww >> 40) & 0xff;
         }
     }
 

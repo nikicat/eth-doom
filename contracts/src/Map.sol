@@ -19,6 +19,7 @@ contract Map is IMap {
     address private immutable _itemsPtr; // STOP byte + 3 bytes/item (read each tick)
     address private immutable _areasPtr; // STOP byte + w*h area bytes (or just STOP if none)
     address private immutable _blockersPtr; // STOP byte + 2 bytes/blocker (read each tick)
+    address private immutable _pushwallsPtr; // STOP byte + 2 bytes/pushable secret wall (read each tick)
     bytes private _guards;
 
     constructor(
@@ -32,7 +33,8 @@ contract Map is IMap {
         bytes memory d,
         bytes memory it,
         bytes memory ar,
-        bytes memory bl
+        bytes memory bl,
+        bytes memory pw
     ) {
         require(t.length == w * h, "bad tiles length");
         require(g.length % 4 == 0, "bad guards length"); // tilex,tiley,dir,class
@@ -40,6 +42,7 @@ contract Map is IMap {
         require(it.length % 3 == 0, "bad items length");
         require(ar.length == 0 || ar.length == w * h, "bad areas length");
         require(bl.length % 2 == 0, "bad blockers length"); // tilex,tiley
+        require(pw.length % 2 == 0, "bad pushwalls length"); // tilex,tiley
         width = w;
         height = h;
         _spawnX = sx;
@@ -50,6 +53,7 @@ contract Map is IMap {
         _itemsPtr = _sstore2(it);
         _areasPtr = _sstore2(ar); // empty => engine treats the whole level as one area
         _blockersPtr = _sstore2(bl); // blocking decorations (block movement, not sight) — M6
+        _pushwallsPtr = _sstore2(pw); // pushable secret walls (Cmd_Use slides them) — M6
         _guards = g;
     }
 
@@ -83,6 +87,10 @@ contract Map is IMap {
 
     function blockersPtr() external view returns (address) {
         return _blockersPtr;
+    }
+
+    function pushwallsPtr() external view returns (address) {
+        return _pushwallsPtr;
     }
 
     /// Copy an SSTORE2 blob out of a data contract (skip the leading STOP byte).
@@ -125,5 +133,9 @@ contract Map is IMap {
 
     function blockers() external view returns (bytes memory) {
         return _readPtr(_blockersPtr);
+    }
+
+    function pushwalls() external view returns (bytes memory) {
+        return _readPtr(_pushwallsPtr);
     }
 }

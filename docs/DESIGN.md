@@ -48,7 +48,8 @@ Session  per-game packed world state                    raycaster view       gol
 (replacing an `abi.encode` blob — ~40% gas cut). Bit layout (LSB first), kept in lockstep across
 `Engine.sol`, the harness, and the web decoder:
 
-- **header**: `rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24`
+- **header**: `rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24 |
+  haspushwall:bit@40`
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
   tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176 |
   keys:uint8@184 | score:uint32@192 | weapon:uint8@224 | bestweapon:uint8@232`
@@ -61,6 +62,10 @@ Session  per-game packed world state                    raycaster view       gol
 - **actor**: `x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88
   | ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 | obclass:uint8@168
   | speed:int32@176 | active:uint8@208 | temp2:int16@216`
+- **pushwall** (one trailing word after the actors, present iff `haspushwall`): `startx:uint8@0 |
+  starty:uint8@8 | dir:uint8@16 | pwstate:uint16@24 | tile:uint8@40`. One secret wall per session
+  (the relocation is permanent, so the record persists once triggered). The `Map` tilemap is
+  immutable, so the Engine reconstructs the effective tilemap each tick from this record.
 
 ## Methodology: faithful transliteration, validated by a C oracle
 
@@ -130,6 +135,19 @@ are deviations from id's *render-coupled* code, not between our two implementati
   `areabyplayer` need no extra packed state. Only `PlaySoundLocTile` audio, door-jamb side textures
   (`|0x40`), and the `actorat` adjacency checks in `CloseDoor`/`DoorClosing` (no actor grid) remain
   dropped. Applied identically in the oracle and Solidity (differential scenario `area_sound`).
+- **Pushwalls reconstruct the immutable tilemap.** A secret wall slides when Used (`Cmd_Use` →
+  `PushWall`/`MovePWalls`), permanently relocating tiles. The C oracle mutates its `tilemap[][]`
+  directly, as id does; but the Solidity `Map` tilemap is **immutable** (SSTORE2), so the Engine
+  carries a small packed pushwall record (`startx,starty,dir,pwstate,tile`) and **reconstructs the
+  effective tilemap each tick** — the vacated tiles become floor (joining the player's area), the wall
+  appears at its slid position — so collision, sight, and the renderer all read the moved geometry with
+  no per-tile state. The two reach the same observable result (differential scenario `push_secret`),
+  though the tilemap *representation* differs (the oracle's grid vs the Engine's reconstruction). id's
+  `0xc0` "moving" tile-flag is dropped — a relocated wall is a plain solid tile (the sim cares only
+  solid-vs-floor; the sub-tile slide is a render value). With the fixed `tics=1` a wall slides 3 tiles
+  (id's "two" assumes `tics>1`). Slice-3 simplifications: one pushwall per session (single record, not
+  a sparse list), no mid-slide actor block-check (the trigger still checks the first destination), and
+  the client sliding-wall visual is deferred.
 - **Enemy classes share one state table + AI.** The full E1 roster lives in one flat `gstates[]` graph
   (0–15 guard, 16–37 SS, 38–53 dog, 54–70 officer). Guard/SS/officer reuse `T_Chase`/`T_Shoot`; the dog
   has its own `T_DogChase` (no LOS — rushes via `SelectDodgeDir` and leaps to `T_Bite` at melee range)
