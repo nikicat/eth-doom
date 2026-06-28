@@ -138,8 +138,21 @@ if [ "$DO_EXTRACT" = 1 ]; then
       p="$OUT/$(echo "$f" | tr '[:lower:]' '[:upper:]').${ext:-WL1}"
       [ -f "$p" ] && vga+=("--$f" "$p")
     done
+    # and AUDIOHED/AUDIOT (M7: digitized SFX live in VSWAP; AdLib SFX + IMF music here)
+    aud=()
+    ah="$OUT/AUDIOHED.${ext:-WL1}"; at="$OUT/AUDIOT.${ext:-WL1}"
+    [ -f "$ah" ] && [ -f "$at" ] && aud+=(--audiohead "$ah" --audiot "$at")
     cargo run -q -p wl-extract --manifest-path "$ROOT/rust/Cargo.toml" -- \
-      --vswap "$vswap" --out "$WOLF_OUT" ${vga[@]+"${vga[@]}"}
+      --vswap "$vswap" --out "$WOLF_OUT" ${vga[@]+"${vga[@]}"} ${aud[@]+"${aud[@]}"}
+    # build the OPL2 synth (Nuked-OPL3 → web/public/opl.wasm) so AdLib SFX + music play.
+    # Cached if already built; needs clang(wasm32) + wasm-opt (skip cleanly if absent).
+    if [ ! -f "$ROOT/web/public/opl.wasm" ]; then
+      if command -v clang >/dev/null && command -v wasm-opt >/dev/null; then
+        bash "$ROOT/audio/build_opl.sh" || echo "  (opl.wasm build failed — AdLib SFX + music will be silent)"
+      else
+        echo "  (clang/wasm-opt not found — skipping opl.wasm; AdLib SFX + music will be silent)"
+      fi
+    fi
     # decode the first level (E1L1) → web/public/level.json
     mh="$OUT/MAPHEAD.${ext:-WL1}"; gm="$OUT/GAMEMAPS.${ext:-WL1}"
     if [ -f "$mh" ] && [ -f "$gm" ]; then

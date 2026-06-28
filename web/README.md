@@ -12,9 +12,14 @@ step), decodes the packed `getState()` words, and draws:
 - a **Wolfenstein-style HUD** — floor, health (with a face that reacts to damage), ammo, and the
   live `gas/input` of the last `submitInput` tx;
 - a **top-down minimap** with the FOV cone and live guard positions, plus a debug readout.
+- **sound** (M7) — like the view, derived off-chain from state deltas: gunshots, enemy sight/fire/death,
+  doors, the pushwall rumble, pickups, take-damage, and looping level music — digitized SFX + AdLib SFX
+  + IMF music, the AdLib/IMF synthesised in-browser by a Nuked-OPL3 wasm chip. Sound starts on the first
+  keypress (browser autoplay policy); **M** mutes.
 
-Everything on screen is decoded from contract state — no client-side game logic. No id artwork
-is shipped: the guard sprite and weapon are drawn procedurally.
+Everything you see and hear is decoded from contract state — no client-side game logic. No id artwork
+or audio is shipped: without a user-provided shareware copy the guard sprite and weapon are drawn
+procedurally and the game is silent.
 
 ## Run
 
@@ -31,7 +36,8 @@ pnpm dev          # http://localhost:5173
 ```
 
 Open the page: it auto-deploys to anvil and starts ticking. **WASD** move · **←/→** (or **A/D**)
-turn · hold **Shift** to strafe · **Space** to fire · **E** to open the door you face. Each step
+turn · hold **Shift** to strafe · **Space** to fire · **E** to open the door you face · **M** to mute.
+Each step
 sends one `submitInput`; the world only advances when you act, so the guard keeps closing in. Doors
 slide open over the next several ticks (the on-chain `doorposition`) and you walk through once open. A
 render loop animates the gun / flashes smoothly between ticks (independent of tx latency).
@@ -58,11 +64,15 @@ cargo run -p wl-extract -- --vswap /path/to/VSWAP.WL1 --out web/public/wolf   # 
 > `.WL6` data is commercial and not redistributable — if you own it, pass it via `--zip` (the
 > extractor reads `VSWAP.WL6` identically), but the script won't fetch it.
 
-`wl-extract` decodes, to PNGs under `web/public/wolf/` (which the client lazy-loads at runtime):
+`wl-extract` decodes, to `web/public/wolf/` (which the client lazy-loads at runtime):
 - **VSWAP** → 64×64 column-major **wall textures** + compshape (RLE) **sprite frames** (guard, the
-  player **pistol** viewmodel);
+  player **pistol** viewmodel) + **digitized SFX** (`digi_NNN.wav`, 16-bit @ 7 kHz);
 - **VGAGRAPH** (Huffman-compressed, VGA-planar) → the **HUD** pics: the status bar, the white digit
-  font, and the animated **BJ face**.
+  font, and the animated **BJ face**;
+- **AUDIOHED/AUDIOT** (M7) → **AdLib SFX** (`adlib_NNN.bin`) + **IMF music** (`music_NNN.imf`), played
+  through `opl.wasm` (Nuked-OPL3). `fetch-shareware.sh` passes these automatically and builds `opl.wasm`;
+  `manifest.json` records the digi sound→index map and which AdLib/music chunks are present. **No id
+  audio is committed** — same `.gitignore`d directory as the art.
 
 The client then textures the walls (page 0/1), billboards real guards (frame by `state`+`dir` via
 Wolf3D's `CalcRotate`), draws the real pistol, and composites the authentic status bar — with the
