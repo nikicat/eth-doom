@@ -17,6 +17,7 @@
 //!   pages [sprite_start, sound_start)  : sprites — compshape (RLE columns, transparent)
 //!   pages [sound_start, chunks_in_file): digitized sounds (ignored)
 
+mod audio;
 mod palette;
 mod vga;
 use palette::PALETTE;
@@ -48,6 +49,15 @@ struct Args {
     /// chunk index where pics begin (STARTPICS; 3 for WL1).
     #[arg(long, default_value_t = 3)]
     start_pics: usize,
+    /// AUDIOHED + AUDIOT (sound/music). If both are given, also dump AdLib SFX + IMF music.
+    #[arg(long)]
+    audiohead: Option<PathBuf>,
+    #[arg(long)]
+    audiot: Option<PathBuf>,
+    /// NUMSOUNDS — the AUDIOT block stride (AdLib@N, digi@2N, music@3N). 0 = auto-detect
+    /// (the shareware data ships with the 87-sound registered header, not AUDIOWL1.H's 69).
+    #[arg(long, default_value_t = 0)]
+    num_sounds: usize,
 }
 
 struct Vswap {
@@ -207,6 +217,41 @@ fn main() -> Result<()> {
         }
     }
 
+    // digitized SFX (M7): the VSWAP sound pages, located via the digi info page (the
+    // last chunk). Each is 8-bit PCM @ ~7kHz → a 16-bit mono WAV the client lazy-loads.
+    let mut digi_written = 0usize;
+    {
+        let total = v.offsets.len();
+        if let Some(info) = v.chunk(total - 1) {
+            for (i, e) in audio::parse_digi_info(info, v.sound_start, total).into_iter().enumerate() {
+                let page = v.sound_start + e.start_page_rel;
+                let off = *v.offsets.get(page).unwrap_or(&0) as usize;
+                if off == 0 || off + e.length > v.data.len() {
+                    eprintln!("skip digi {i}: page {page} out of range");
+                    continue;
+                }
+                let pcm = &v.data[off..off + e.length]; // sound pages are contiguous in the file
+                audio::write_wav_u8(&args.out.join(format!("digi_{i:03}.wav")), pcm, audio::DIGI_HZ)?;
+                digi_written += 1;
+            }
+        }
+    }
+
+    // AdLib SFX + IMF music (M7) from AUDIOHED/AUDIOT, when provided.
+    let mut adlib_written: Vec<usize> = Vec::new();
+    let mut music_written: Vec<usize> = Vec::new();
+    if let (Some(ahp), Some(atp)) = (&args.audiohead, &args.audiot) {
+        let (ahead, at) = (fs::read(ahp)?, fs::read(atp)?);
+        let n = if args.num_sounds == 0 { None } else { Some(args.num_sounds) };
+        match audio::extract_audiot(&ahead, &at, n, &args.out) {
+            Ok(o) => {
+                adlib_written = o.adlib;
+                music_written = o.music;
+            }
+            Err(e) => eprintln!("AUDIOT skipped: {e}"),
+        }
+    }
+
     // optional: VGAGRAPH pics (status bar, BJ face, fonts) if the trio is provided
     let mut pics_written = 0usize;
     let mut pic_dims: Vec<serde_json::Value> = Vec::new();
@@ -224,6 +269,14 @@ fn main() -> Result<()> {
         }
     }
 
+    // soundname → digi-list-index map (only entries whose file we actually wrote), so
+    // the client maps a game event to digi_NNN.wav by name and otherwise falls back to AdLib.
+    let digimap: serde_json::Map<String, serde_json::Value> = audio::WOLFDIGIMAP
+        .iter()
+        .filter(|(_, idx)| *idx < digi_written)
+        .map(|(name, idx)| (name.to_string(), serde_json::json!(idx)))
+        .collect();
+
     let manifest = serde_json::json!({
         "wall_count": v.sprite_start,
         "sprite_count": v.sound_start - v.sprite_start,
@@ -232,11 +285,21 @@ fn main() -> Result<()> {
         "pics_written": pics_written,
         "pics": pic_dims,
         "dim": DIM,
+        "audio": {
+            "digi_count": digi_written,
+            "digi_hz": audio::DIGI_HZ,
+            "digimap": digimap,
+            "adlib": adlib_written,
+            "music": music_written,
+        },
     });
     fs::write(args.out.join("manifest.json"), serde_json::to_vec_pretty(&manifest)?)?;
 
     println!(
-        "wl-extract: {walls} walls + {sprites} sprites + {pics_written} pics -> {} (manifest.json written)",
+        "wl-extract: {walls} walls + {sprites} sprites + {pics_written} pics + {digi_written} digi + \
+         {} adlib + {} music -> {} (manifest.json written)",
+        adlib_written.len(),
+        music_written.len(),
         args.out.display()
     );
     if walls == 0 && sprites == 0 {

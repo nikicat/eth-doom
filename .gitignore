@@ -11,8 +11,14 @@ node_modules/
 /web/dist/
 /oracle/build/
 /renderer/build/
+/audio/build/
 *.wasm
 /web/public/wolfrender.mjs
+
+# third-party OPL2 emulator source (Nuked-OPL3, LGPL-2.1) fetched by audio/build_opl.sh —
+# NOT committed, like reference/ (re-fetch with the build script). The decoded audio
+# itself (digi WAV / AdLib / IMF) lands under /web/public/wolf/, already ignored above.
+/audio/vendor/
 
 # id Software shareware assets — DO NOT COMMIT (read from a user-provided dir)
 /assets/

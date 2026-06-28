@@ -96,6 +96,18 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   73 statics on E1L1, extracted from plane 1 by `map-extract`), and the status bar's **weapon slot**
   showing the real pistol pic above the health-driven BJ face. All render-side — the on-chain sim is
   unchanged.
+- **Authentic Wolf3D audio (M7)** — sound is off-chain, like rendering: the client **diffs consecutive
+  decoded states** and plays the matching id sound, **positioned** (stereo pan + distance attenuation)
+  relative to the player — a gunshot on the ammo drop, `HALT!`/bark when a guard wakes, enemy fire and
+  death screams, door open/close, the pushwall rumble, pickups, take-damage, the player death cry, and
+  the level-done jingle. Three faithful sources, all decoded from the user's shareware by `wl-extract`
+  (**no id audio committed**): **digitized SFX** (VSWAP PCM → 16-bit WAV @ 7 kHz), **AdLib SFX**
+  (`AUDIOT` `AdLibSound` chunks), and **IMF music** (`AUDIOT` music chunks; E1L1 plays "Get Them For
+  Greater Justice!"). The AdLib SFX and IMF music are synthesised in the browser by **Nuked-OPL3** —
+  the same YM3812 FM chip id drove — compiled freestanding to `web/public/opl.wasm`. id played a
+  sound's **digitized** version when present and its **AdLib** version otherwise (`SD_PlaySound`→
+  `DigiMap`); the client does the same. Music loops; `M` mutes; the AudioContext starts on the first
+  keypress (browser autoplay policy). No on-chain change.
 
 ## Milestones
 
@@ -115,7 +127,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 | | status | scope |
 |---|---|---|
 | **M6** weapons & world completeness | ✅ | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); **pushwalls / secret walls** (slice 3) ✅ — `Cmd_Use` slides a pushable wall (`PushWall`/`MovePWalls`); the immutable-Map tilemap is **reconstructed each tick** from a packed pushwall record (the vacated tiles become walkable + join the player's area, the wall relocates), differential-verified across the full slide + completion (`push_secret`), and the sliding wall **renders** (client + T3 reconstruct the moved tilemap for `wolfrender`); **multi-pushwall** ✅ — a sparse list of records (several walls slide at once), `map-extract` reads plane-1 `PUSHABLETILE` so E1L1's 5 real secret walls work, differential-verified (`multi_push`, two concurrent walls); the walls glide **sub-tile** (smooth slide, render-only — a near-face offset in `wolfrender`, id's `HitVert`/`HitHorizPWall`); **elevator + level exit** (slice 4) ✅ — `Cmd_Use` on an `ELEVATORTILE` (east/west wall) latches `exit = ex_completed` and **freezes the sim** (oracle + wasm + Engine short-circuit; the Session is terminal), differential-verified (`level_exit`); E1L1's real exit elevator works for free (`map-extract` keeps wall tile values); the **client plays Wolf3D's level-complete intermission** (doors close → "LEVEL COMPLETED" + BJ + score count-up, render-only). No floor 2 — a demo keeps one immutable Map per Session; `ex_secretlevel` + multi-level flow deferred |
-| **M7** audio | ⬜ | digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas |
+| **M7** audio | ✅ | **digitized SFX** (VSWAP PCM → WAV) + **AdLib SFX** & **IMF music** (AUDIOT/AUDIOHED), all **client-side, triggered from state deltas** — the client diffs consecutive decoded states and plays the matching Wolf3D sound, positioned (stereo pan + distance gain) relative to the player. AdLib SFX + IMF music are synthesised in the browser by **Nuked-OPL3** (the YM3812 id drove) compiled to `web/public/opl.wasm` (`audio/build_opl.sh`, freestanding clang→wasm, source fetched not committed); digitized SFX play when present and AdLib otherwise (id's `DigiMap` behaviour). `wl-extract` decodes all three from the user's shareware (nothing id-owned committed); `audio/verify_opl.mjs` smoke-tests the chip + IMF/AdLib pipelines headlessly. No on-chain change — audio is render-side, like the view |
 | **M8** presentation shell | ⬜ | title / menu / "Get Psyched!" / level-intermission tally / episode flow |
 | **M9** MegaETH deployment | ⛔ | deploy to MegaETH testnet; fire-and-forget session-key play at ~native rate; end-to-end latency + gas (needs an RPC + funded key) |
 | **M10** multiplayer | ⬜ | N-player shared `Session` (players as actors) + join/identity + session keys; chain-as-lockstep tick model (input log + paced advance); PvP/co-op (public-state caveat) |
@@ -209,6 +221,10 @@ bash renderer/build.sh                     # build the wasm wall renderer (Emscr
 bash renderer/build_headless.sh            # build the wall renderer for headless Node (T3)
 node renderer/verify_render.mjs            # T3: wall-view framebuffer == committed render goldens
 #   (regenerate render goldens after an intentional renderer/sim change: --write)
+bash audio/build_opl.sh                     # M7: fetch Nuked-OPL3 + build the OPL synth -> web/public/opl.wasm
+node audio/verify_opl.mjs                   # M7: smoke-test the OPL chip + IMF/AdLib pipelines (asset-free)
+# authentic id art + sound (optional; nothing id-owned committed):
+scripts/fetch-shareware.sh                  # download shareware → walls/sprites/HUD + digi/AdLib/IMF audio + opl.wasm
 # live view:
 anvil --silent &
 ( cd web && pnpm install && pnpm dev )      # http://localhost:5173
@@ -226,7 +242,11 @@ anvil --silent &
   smoothly via a near-face raycaster offset) · **elevator + level exit** (slice 4 — the switch ends the
   level, the sim freezes, and the client plays Wolf3D's level-complete intermission). `ex_secretlevel` /
   actual level→level flow stay out of scope (a demo).
-- **M7** (audio) — digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas.
+- **M7 ✅ done** — audio: digitized SFX (VSWAP) + AdLib SFX & IMF music (AUDIOT) via a Nuked-OPL3 wasm
+  synth, all client-side and triggered from state deltas (positioned pan/gain), digi-preferred with an
+  AdLib fallback (id's `DigiMap`). Asset-free headless smoke test (`audio/verify_opl.mjs`). The level→level
+  music change is moot here (one Map per Session, by design); per-tic audio fidelity isn't differential-
+  tested (it's render-side, off the consensus path — same status as the renderer).
 - **M8** (presentation shell) — title / menu / "Get Psyched!" / level-intermission tally / episode flow.
 - **M9** (MegaETH) — blocked on an RPC + funded key: deploy to testnet, fire-and-forget session-key play
   at ~native rate, end-to-end latency + gas.

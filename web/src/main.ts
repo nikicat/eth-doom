@@ -9,6 +9,7 @@ import {
 } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { foundry } from "viem/chains";
+import { loadAudio, type AudioEngine } from "./audio";
 
 // forge artifacts (abi + creation bytecode)
 import EngineA from "../../contracts/out/Engine.sol/Engine.json";
@@ -556,6 +557,7 @@ type Assets = {
   pics: Map<number, HTMLCanvasElement>; // VGAGRAPH HUD pics (status bar, digits, faces)
 };
 let assets: Assets | null = null;
+let audio: AudioEngine | null = null; // off-chain sound (M7); null if no audio data / opl.wasm
 // VGAGRAPH pic indices (this shareware's set): status bar 92, white digits 105–114
 // (N_0PIC…N_9PIC), BJ faces 115–138 (FACE1APIC + 3·level + look). The weapon-slot pics
 // (KNIFEPIC..GATLINGGUNPIC, 48×24) are 97–100 — id's GFXV_WL1.H enum +2, matching the
@@ -1310,6 +1312,7 @@ function renderDbg(s: State, tick: number, gas: number | null) {
     `predict   ${predictLabel}\n` +
     `walls     ${renderLabel}\n` +
     `art       ${assets ? "real id (VSWAP)" : "procedural"}\n` +
+    `audio     ${audio ? audio.label() : "none"}\n` +
     `guards    ${s.guards.length}\n` +
     `rndindex  ${s.rndindex}\n\n` +
     `player\n` +
@@ -1333,11 +1336,79 @@ const fx: Fx = { muzzleUntil: 0, recoilUntil: 0, damageUntil: 0 };
 // ---------------------------------------------------------------------------
 const keys = new Set<string>();
 addEventListener("keydown", (e) => {
-  keys.add(e.key.toLowerCase());
-  if ([" ", "arrowleft", "arrowright", "arrowup", "arrowdown"].includes(e.key.toLowerCase()))
-    e.preventDefault();
+  const k = e.key.toLowerCase();
+  keys.add(k);
+  audio?.unlock(); // browsers need a user gesture to start the AudioContext
+  if (k === "m") audio?.toggleMute();
+  if ([" ", "arrowleft", "arrowright", "arrowup", "arrowdown"].includes(k)) e.preventDefault();
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+
+// --- audio events from state deltas (M7) -----------------------------------------
+// Off-chain, like rendering: diff two consecutive decoded states and play the matching
+// Wolf3D sound, positioned relative to the player. No game logic — just a view of state.
+const sightSnd = (o: number) => (o === DOGOBJ ? "DOGBARKSND" : o === SSOBJ ? "SCHUTZADSND" : "HALTSND");
+const fireSnd = (o: number) => (o === SSOBJ ? "SSFIRESND" : "NAZIFIRESND"); // dogs don't shoot
+const deathSnd = (o: number) =>
+  o === DOGOBJ ? "DOGDEATHSND" : o === SSOBJ ? "DEATHSCREAM2SND" : o === OFFICEROBJ ? "DEATHSCREAM3SND" : "DEATHSCREAM1SND";
+const pickupSnd = (n: number) => {
+  // bo_ enum (wl_sim.h): firstaid 5, key1-4 6-9, cross/chalice/bible/crown 10-13,
+  // clip/clip2 14-15, machinegun 16, chaingun 17, food 18, fullheal 19, 25clip 20.
+  if (n === 16) return "GETMACHINESND";
+  if (n === 17) return "GETGATLINGSND";
+  if (n >= 6 && n <= 9) return "GETKEYSND";
+  if (n === 5 || n === 18) return "HEALTH1SND";
+  if (n === 19) return "HEALTH2SND";
+  if (n >= 10 && n <= 13) return ["BONUS1SND", "BONUS2SND", "BONUS3SND", "BONUS4SND"][n - 10];
+  return "GETAMMOSND"; // clips / ammo
+};
+function applyAudio(before: State, after: State) {
+  if (!audio?.unlocked || audio.muted) return;
+  const A = audio;
+  // pan/gain from a world position (in TILE units, fractional) relative to the player.
+  // forward = (cos a, −sin a); right = (sin a, cos a) in the screen-y-south frame.
+  const playPos = (snd: string, wx: number, wy: number) => {
+    const px = after.player.x / TILEGLOBAL, py = after.player.y / TILEGLOBAL;
+    const dx = wx - px, dy = wy - py;
+    const d = Math.hypot(dx, dy);
+    const a = after.player.angle * DR;
+    const pan = d < 0.01 ? 0 : (dx * Math.sin(a) + dy * Math.cos(a)) / d;
+    A.play(snd, pan, Math.max(0, 1 - d / 18)); // id's ATABLEMAX≈15 tiles → fade past ~18
+  };
+  const px = (g: { x: number }) => g.x / TILEGLOBAL;
+
+  const pb = before.player, pa = after.player;
+  if (pa.ammo < pb.ammo) A.play(pa.weapon === 2 ? "ATKMACHINEGUNSND" : pa.weapon === 3 ? "ATKGATLINGSND" : "ATKPISTOLSND", 0, 0.85);
+  if (pb.health > 0 && pa.health <= 0) A.play("PLAYERDEATHSND", 0, 1);
+  else if (pa.health < pb.health) A.play("TAKEDAMAGESND", 0, 0.8);
+
+  const ng = Math.min(before.guards.length, after.guards.length);
+  for (let i = 0; i < ng; i++) {
+    const g0 = before.guards[i], g1 = after.guards[i];
+    const wx = px(g1), wy = g1.y / TILEGLOBAL;
+    if (rs(g0.state) === S_STAND && rs(g1.state) !== S_STAND) playPos(sightSnd(g1.obclass), wx, wy);
+    if (isFiring(g1.state) && !isFiring(g0.state)) playPos(fireSnd(g1.obclass), wx, wy);
+    if (isDead(g1.state) && !isDead(g0.state)) playPos(deathSnd(g1.obclass), wx, wy);
+  }
+  for (let i = 0; i < after.doors.length; i++) {
+    const a0 = before.doors[i]?.action ?? 1, a1 = after.doors[i].action; // dr_opening=2, dr_closing=3
+    const d = doorList[i];
+    if (!d) continue;
+    if (a1 === 2 && a0 !== 2) playPos("OPENDOORSND", d[0] + 0.5, d[1] + 0.5);
+    else if (a1 === 3 && a0 !== 3) playPos("CLOSEDOORSND", d[0] + 0.5, d[1] + 0.5);
+  }
+  if (after.pushwalls.length > before.pushwalls.length) {
+    const pw = after.pushwalls[after.pushwalls.length - 1];
+    playPos("PUSHWALLSND", pw.sx + 0.5, pw.sy + 0.5);
+  }
+  for (let i = 0; i < after.itemsTaken.length; i++) {
+    if (after.itemsTaken[i] && !before.itemsTaken[i]) {
+      const it = itemList[i];
+      if (it) playPos(pickupSnd(it[2]), it[0] + 0.5, it[1] + 0.5);
+    }
+  }
+  if (!before.exit && after.exit) A.play("LEVELDONESND", 0, 1);
+}
 
 const MOVE = 35; // forward/back/strafe input (≈ max thrust after MOVESCALE)
 // turn input. The engine turns controlx/ANGLESCALE(20) degrees per tic, so degrees/sec =
@@ -1383,6 +1454,8 @@ async function main() {
   baseTiles = Uint16Array.from(tiles); // snapshot the unmoved tilemap for pushwall overlays
   pwoffLive = new Int32Array(W * H); // per-tile pushwall sub-tile offset, synced to the wasm renderer
   assets = await loadAssets(); // authentic id art if /wolf/*.png present, else procedural
+  audio = await loadAudio(); // off-chain sound (M7): digi SFX + AdLib/IMF music, else null
+  if (audio) console.log("[audio] loaded — press a key to enable sound");
   wall = await loadWasmRenderer(); // wasm wall raycaster if built, else the TS one
   renderLabel = wall ? "wasm (Emscripten raycaster)" : "ts raycaster";
   if (wall) console.log("[render] wasm wall renderer active");
@@ -1558,6 +1631,7 @@ async function main() {
       const predHex = predictor.read();
       const pred = decode(predHex);
       applyFx(before, pred);
+      applyAudio(before, pred);
       latest = pred;
       tick++;
       predHist.set(tick, predHex.toLowerCase()); // for the parallel reconciler
@@ -1578,6 +1652,7 @@ async function main() {
       markTick();
       const after = decode(await getStateHex());
       applyFx(before, after);
+      applyAudio(before, after);
       latest = after;
       tick++;
     }

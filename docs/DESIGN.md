@@ -184,6 +184,29 @@ are deviations from id's *render-coupled* code, not between our two implementati
   order) and `TryWalk` only tests tiles adjacent to the mover, never its own. So guards no longer walk
   through each other. The `actorat`-based straddle checks in `CloseDoor`/`DoorClosing` stay player-only
   (a closing door can still pinch a guard standing in it — an accepted simplification).
+- **Audio is off-chain, reconstructed from state deltas (M7).** id called `SD_PlaySound` inline from the
+  sim (e.g. `GunAttack`, `KillActor`, `OperateDoor`, `GetBonus`). On-chain there is no audio device and
+  emitting a per-tic sound *log* would cost gas for a consensus-irrelevant value, so — exactly like the
+  renderer — the **client** derives sound from the public state: it diffs two consecutive decoded states
+  and plays the matching sound (ammo drop → the weapon's gunshot; a guard's `T_Stand`→chase → its sight
+  cry; shoot/die frames → fire/death; door `action` → open/close; a new pushwall record → the rumble; a
+  taken-bit flip → the pickup; `health`↓ → take-damage; `exit` latch → level-done). This is a *view* of
+  state, never a cause — no sim logic client-side. Three faithful sources, decoded from the user's
+  shareware by `wl-extract` (no id audio committed): **digitized SFX** (VSWAP PCM, the `SDL_SetupDigi`
+  info-page walk + `wolfdigimap` name→index, 8-bit→16-bit WAV @ 7 kHz), **AdLib SFX** (`AUDIOT`
+  `AdLibSound` = instrument + a 140 Hz F-number stream, `SDL_ALPlaySound`/`SDL_ALSoundService`), and
+  **IMF music** (`AUDIOT` music = a 700 Hz OPL register stream, `SD_StartMusic`/`SDL_ALService`). AdLib
+  SFX and IMF music are synthesised by **Nuked-OPL3** (the YM3812 id drove) compiled to wasm. Faithful
+  choices/deviations, all render-side: id plays a sound's **digitized** version when one is mapped and
+  its **AdLib** version otherwise (`SD_PlaySound`→`DigiMap`) — the client does the same; the **PC-speaker**
+  source is dropped (a third rendering of the same effects); id's `SetSoundLoc` per-ear attenuation tables
+  are approximated by a Web Audio `StereoPanner` + linear distance gain in the same view frame; the
+  digitized-sound **sample rate** (~7 kHz, id's DMA time constant) and the **block layout** of `AUDIOT`
+  (`NUMSOUNDS` stride) are auto-detected (the shareware data ships with the registered 87-sound header,
+  not `AUDIOWL1.H`'s 69); and there is no level→level **music change** (one Map per Session, by design —
+  E1L1 simply loops "Get Them For Greater Justice!"). Because audio is off the consensus path, it is not
+  part of the differential test — the same status as the renderer; `audio/verify_opl.mjs` instead
+  asset-free smoke-tests that the OPL chip + the IMF/AdLib replay clocks actually synthesise sound.
 
 ## Tooling
 
@@ -194,11 +217,13 @@ are deviations from id's *render-coupled* code, not between our two implementati
 | client-side predictor | C → WebAssembly | clang `--target=wasm32` (freestanding, no Emscripten) + binaryen `wasm-opt`; the SAME carved C as the oracle, trig baked from `--dump-trig` |
 | wall renderer | C → WebAssembly | Emscripten; id's `WL_DRAW.C` wall math + a portable grid-DDA ray cast → framebuffer + depth |
 | differential + gas harness | Rust | alloy + in-process anvil |
-| client (first-person view + HUD) | TypeScript | Vite + viem; DDA raycaster adapted from 3DSage (MIT) |
-| asset extractor (VSWAP textures/sprites + VGAGRAPH HUD pics) | Rust | `png`; reads user-provided shareware, nothing committed |
+| client (first-person view + HUD + audio) | TypeScript | Vite + viem; DDA raycaster adapted from 3DSage (MIT); Web Audio sound from state deltas |
+| OPL2 FM synth (AdLib SFX + IMF music) | C → WebAssembly | clang `--target=wasm32` (freestanding, no Emscripten) + binaryen; wraps **Nuked-OPL3** (LGPL-2.1, fetched not committed) |
+| asset extractor (VSWAP textures/sprites + VGAGRAPH HUD pics + digi/AdLib/IMF audio) | Rust | `png`; reads user-provided shareware, nothing committed |
 
 `reference/` (id's Wolf3D source) is **not committed** — it's under a restrictive license; clone
-commands are in the root README. No id game assets are committed.
+commands are in the root README. The **Nuked-OPL3** emulator source (`audio/vendor/`, LGPL-2.1) is
+likewise not committed — `audio/build_opl.sh` fetches it. No id game assets are committed.
 
 ## Glossary
 
