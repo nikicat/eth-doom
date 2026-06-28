@@ -64,6 +64,7 @@ EXPORT void reset(void) {
     playerdead = 0;
     memset(tilemap, 0, sizeof tilemap);
     memset(areamap, 0, sizeof areamap);
+    memset(blockmap, 0, sizeof blockmap);
     InitDoorList();
     InitStaticList();
 }
@@ -72,6 +73,8 @@ EXPORT void set_wall(int x, int y) { tilemap[x][y] = 1; }
 EXPORT void set_area(int x, int y, int a) { areamap[x][y] = (unsigned char)a; }
 EXPORT void add_door(int x, int y, int vertical, int lock) { SpawnDoor(x, y, vertical, lock); }
 EXPORT void add_item(int x, int y, int itemnumber) { SpawnStatic(x, y, itemnumber); }
+/* blocking decoration (M6): set BEFORE init_actors (InitActors seeds actorat from blockmap). */
+EXPORT void add_blocker(int x, int y) { blockmap[x][y] = 1; }
 
 /* Sugar for the headless verifier: mirror oracle.c load_map()'s char semantics so
  * the verifier can replay the text maps without duplicating the bo_/door mapping. */
@@ -84,6 +87,7 @@ EXPORT void setup_tile(int x, int y, int ch) {
         case 'h': SpawnStatic(x, y, bo_firstaid); break;
         case 'k': SpawnStatic(x, y, bo_key1); break;
         case 't': SpawnStatic(x, y, bo_cross); break;
+        case 'B': blockmap[x][y] = 1; break; /* blocking decoration */
         default: if (ch >= '0' && ch <= '9') areamap[x][y] = ch - '0'; break; /* floor / area digit */
     }
 }

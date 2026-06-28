@@ -95,7 +95,7 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
 /// wall, `doornum|0x80` = door, 0 = floor. Door chars match the oracle map loader
 /// ('D' vertical, 'd' horizontal, lock 0), with doornum in y-major scan order, and
 /// also returns the Map door bytes (3/door: tilex, tiley, vertical|lock<<1).
-fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
+fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)> {
     let txt = fs::read_to_string(repo(path))?;
     let mut lines = txt.lines();
     let hdr = lines.next().ok_or_else(|| anyhow!("empty map"))?;
@@ -106,6 +106,7 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)
     let mut areas = vec![0u8; (w * h) as usize]; // per-tile area (floor digit), door tiles fixed up by the Engine
     let mut doors = Vec::new();
     let mut items = Vec::new();
+    let mut blockers = Vec::new(); // 'B' blocking decorations (2 bytes each: tilex, tiley)
     let mut doornum: u8 = 0;
     for y in 0..h {
         let row = lines.next().ok_or_else(|| anyhow!("map too short"))?;
@@ -126,6 +127,7 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)
                 b'h' => items.extend_from_slice(&item(5)),  // bo_firstaid
                 b'k' => items.extend_from_slice(&item(6)),  // bo_key1
                 b't' => items.extend_from_slice(&item(10)), // bo_cross
+                b'B' => blockers.extend_from_slice(&[x as u8, y as u8]), // blocking decoration
                 b'0'..=b'9' => areas[(y * w + x) as usize] = c - b'0', // floor, explicit area
                 _ => {}
             }
@@ -135,7 +137,7 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>)
     if areas.iter().all(|&a| a == 0) {
         areas.clear();
     }
-    Ok((w, h, tiles, doors, items, areas))
+    Ok((w, h, tiles, doors, items, areas, blockers))
 }
 
 /// Parse "cx cy buttons" lines (skip blank / '#').
@@ -272,10 +274,14 @@ async fn main() -> Result<()> {
         // wake it, opening the door connects the areas and it then hears + wakes.
         ("area_sound", "oracle/maps/area_room.txt", "vectors/area_sound.input.txt",
          "vectors/area_sound.golden.jsonl", (4, 8, 1), vec![12, 3, 2, 0]),
+        // block_static: player walks into a barrel and is stopped; a guard's first chase
+        // step into a barrel forces a reroute — blocking-decoration collision (M6).
+        ("block_static", "oracle/maps/block_room.txt", "vectors/block_static.input.txt",
+         "vectors/block_static.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 0]),
     ];
 
     for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {
-        let (w, h, tiles, doors, items, areas) = load_map(mapf)?;
+        let (w, h, tiles, doors, items, areas, blockers) = load_map(mapf)?;
         let inputs = load_inputs(inf)?;
         let golden = load_golden(goldf)?;
 
@@ -287,6 +293,7 @@ async fn main() -> Result<()> {
             Bytes::from(doors),
             Bytes::from(items),
             Bytes::from(areas),
+            Bytes::from(blockers),
         ).await?;
         let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address(), Address::ZERO).await?;
 
@@ -330,6 +337,7 @@ async fn main() -> Result<()> {
         let mut guards = triplet("guards", 4);
         guards.truncate(12 * 4); // match the client's MAX_GUARDS cap
         let (doors, items) = (triplet("doors", 3), triplet("items", 3));
+        let blockers = triplet("blockers", 2); // blocking decorations (2 bytes each) — M6
         let areas: Vec<u8> = level["areas"].as_array()
             .map(|a| a.iter().map(|v| v.as_u64().unwrap() as u8).collect()).unwrap_or_default();
         let (ng, nd, ni) = (guards.len() / 4, doors.len() / 3, items.len() / 3);
@@ -338,7 +346,7 @@ async fn main() -> Result<()> {
             provider.clone(), U256::from(w), U256::from(h), Bytes::from(tiles),
             U256::from(sx), U256::from(sy), U256::from(sdir),
             Bytes::from(guards), Bytes::from(doors), Bytes::from(items),
-            Bytes::from(areas),
+            Bytes::from(areas), Bytes::from(blockers),
         ).await?;
         let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address(), Address::ZERO).await?;
 
@@ -362,7 +370,7 @@ async fn main() -> Result<()> {
             provider.clone(), U256::from(w), U256::from(h),
             Bytes::from(level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
             U256::from(sx), U256::from(sy), U256::from(sdir),
-            Bytes::new(), Bytes::from(triplet("doors", 3)), Bytes::from(triplet("items", 3)), Bytes::new(),
+            Bytes::new(), Bytes::from(triplet("doors", 3)), Bytes::from(triplet("items", 3)), Bytes::new(), Bytes::new(),
         ).await?;
         let s0 = sess::Session::deploy(provider.clone(), *engine.address(), *map0.address(), Address::ZERO).await?;
         let st0 = s0.getState().call().await?;
@@ -374,7 +382,7 @@ async fn main() -> Result<()> {
         let mapb = mp::Map::deploy(
             provider.clone(), U256::from(w), U256::from(h),
             Bytes::from(level["tiles"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u8).collect::<Vec<u8>>()),
-            U256::from(sx), U256::from(sy), U256::from(sdir), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
+            U256::from(sx), U256::from(sy), U256::from(sdir), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(), Bytes::new(),
         ).await?;
         let sb = sess::Session::deploy(provider.clone(), *engine.address(), *mapb.address(), Address::ZERO).await?;
         let stb = sb.getState().call().await?;

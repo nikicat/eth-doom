@@ -25,7 +25,7 @@ contract SessionTest is Test {
                 if (x == 0 || y == 0 || x == 3 || y == 3) tiles[y * 4 + x] = 0x01;
             }
         }
-        map = new Map(4, 4, tiles, 1, 1, 1, "", "", "", "");
+        map = new Map(4, 4, tiles, 1, 1, 1, "", "", "", "", "");
         // a sane wall-clock so expiry math is meaningful
         vm.warp(1_700_000_000);
     }

@@ -41,6 +41,7 @@ let guardTiles: number[][] = [[12, 8]];
 let doorList: number[][] = []; // [tilex, tiley, vertical|lock<<1] in doornum order
 let itemList: number[][] = []; // [tilex, tiley, itemnumber] bonus items
 let sceneryList: number[][] = []; // [tilex, tiley, spriteIndex] decorative statics (render-only, off-chain)
+let blockerList: number[][] = []; // [tilex, tiley] blocking statics (on-chain movement collision, M6)
 let areaMap: number[] = []; // per-tile area number (row-major); empty => single area
 let levelName = "test room";
 
@@ -64,6 +65,7 @@ function initTestRoom() {
   doorList = [];
   itemList = [];
   sceneryList = []; // the synthetic test room has no scenery
+  blockerList = []; // …nor blocking statics
   let doornum = 0;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
@@ -95,6 +97,7 @@ async function loadLevel(): Promise<boolean> {
     doorList = (L.doors as number[][] | undefined) ?? [];
     itemList = (L.items as number[][] | undefined) ?? [];
     sceneryList = (L.scenery as number[][] | undefined) ?? []; // decorative statics (render-only)
+    blockerList = (L.blockers as number[][] | undefined) ?? []; // blocking statics (on-chain collision)
     areaMap = (L.areas as number[] | undefined) ?? []; // per-tile area numbers (sound localization)
     guardTiles = (L.guards as number[][])
       .map(([x, y, dir, cls]) => ({ x, y, dir: dir ?? 0, cls: cls ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
@@ -138,6 +141,12 @@ function areasHex(): Hex {
   if (areaMap.length === 0) return "0x";
   return bytesToHex(Uint8Array.from(areaMap.map((a) => a & 0xff)));
 }
+// blockers blob: 2 bytes each (tilex, tiley) — blocking statics, movement collision (M6)
+function blockersHex(): Hex {
+  const b = new Uint8Array(blockerList.length * 2);
+  blockerList.forEach(([x, y], i) => { b[i * 2] = x; b[i * 2 + 1] = y; });
+  return bytesToHex(b);
+}
 // per-doornum open fraction (0 closed .. 1 open), refreshed each frame from state
 const doorOpenFrac = new Float64Array(64);
 
@@ -178,6 +187,7 @@ async function loadPredictor(): Promise<Predictor | null> {
     }
     for (const [x, y, pk] of doorList) E.add_door(x, y, (pk ?? 0) & 1, (pk ?? 0) >> 1);
     for (const [x, y, n] of itemList) E.add_item(x, y, n);
+    for (const [x, y] of blockerList) E.add_blocker(x, y); // before init_actors (seeds actorat)
     E.init_actors();
     E.add_player(spawnTile.x, spawnTile.y, spawnTile.dir);
     for (const [x, y, dir, cls] of guardTiles) E.add_enemy(cls ?? 0, x, y, dir ?? 0);
@@ -1243,7 +1253,7 @@ async function main() {
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(),
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
-    guardsHex(), doorsHex(), itemsHex(), areasHex(),
+    guardsHex(), doorsHex(), itemsHex(), areasHex(), blockersHex(),
   ]);
   // owner = our dev account (the "main wallet"). It signs exactly once below to
   // delegate a session key; from then on the burner signs every tick.

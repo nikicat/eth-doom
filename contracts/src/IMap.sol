@@ -18,10 +18,15 @@ interface IMap {
     function doors() external view returns (bytes memory);
     /// @notice Bonus items, 3 bytes each: tilex, tiley, itemnumber (WL_DEF.H stat_t).
     function items() external view returns (bytes memory);
+    /// @notice Blocking decorations (WL_ACT1.C `block` statics), 2 bytes each: tilex, tiley.
+    /// They block movement (player TryMove + enemy TryWalk) but not sight or bullets.
+    function blockers() external view returns (bytes memory);
     /// @notice SSTORE2 pointers for the door/item lists (STOP byte + 3 bytes each),
     /// read each tick via EXTCODECOPY from offset 1. extcodesize-1 gives the length.
     function doorsPtr() external view returns (address);
     function itemsPtr() external view returns (address);
+    /// @notice SSTORE2 pointer for the blockers list (STOP byte + 2 bytes each), read each tick.
+    function blockersPtr() external view returns (address);
     /// @notice SSTORE2 pointer for the per-tile area map (STOP byte + width*height area
     /// bytes), or address(0)/empty when the level is a single area. Drives sound
     /// localization: gunfire only alerts guards in areas connected to the player's.

@@ -59,7 +59,8 @@ contract Deploy is Script {
             vm.parseBytes(vm.parseJsonString(j, ".guardsHex")),
             vm.parseBytes(vm.parseJsonString(j, ".doorsHex")),
             vm.parseBytes(vm.parseJsonString(j, ".itemsHex")),
-            vm.parseBytes(vm.parseJsonString(j, ".areasHex"))
+            vm.parseBytes(vm.parseJsonString(j, ".areasHex")),
+            vm.parseBytes(vm.parseJsonString(j, ".blockersHex"))
         );
     }
 
@@ -76,6 +77,6 @@ contract Deploy is Script {
             }
         }
         bytes memory guards = abi.encodePacked(uint8(5), uint8(5), uint8(0), uint8(0)); // tilex,tiley,dir,class
-        return new Map(w, h, tiles, 1, 1, 1, guards, "", "", ""); // single area
+        return new Map(w, h, tiles, 1, 1, 1, guards, "", "", "", ""); // single area, no blockers
     }
 }

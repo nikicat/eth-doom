@@ -169,6 +169,12 @@ extern objtype *player;
 /* Walls: 1..63 = solid, 0 = passable (plane-0 tile semantics). */
 extern unsigned char tilemap[MAPSIZE][MAPSIZE];
 
+/* Blocking decorations (WL_ACT1.C statics with the `block` flag — barrels, tables,
+ * pillars, lamps…): 1 = a static blocks movement on this floor tile, 0 = clear. id
+ * marks these in `actorat`, so they block both the player (TryMove) and enemies
+ * (TryWalk/CHECKSIDE) but not sight or bullets (CheckLine reads the tilemap). M6. */
+extern unsigned char blockmap[MAPSIZE][MAPSIZE];
+
 /* Per-tile area number (0..NUMAREAS-1), from plane-0 floor codes (tile - AREATILE).
  * Drives sound localization: gunfire alerts only guards in areas reachable from the
  * player's area through OPEN doors (WL_ACT1.C areaconnect/ConnectAreas). */

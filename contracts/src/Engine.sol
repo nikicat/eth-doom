@@ -189,6 +189,7 @@ contract Engine {
         bytes itemData; // static: 3 bytes/item (tilex, tiley, itemnumber), from the Map
         uint256[] itemTaken; // dynamic: bit i = item i taken (ceil(numItems/256) words)
         uint256 numItems;
+        bytes blockers; // static: 2 bytes/blocker (tilex, tiley) — blocking decorations (M6)
         uint256 rndindex;
         bytes tiles;
         uint256 w;
@@ -301,6 +302,11 @@ contract Engine {
         wd.itemData = _readPtr(IMap(map).itemsPtr());
         wd.numItems = wd.itemData.length / 3;
         wd.itemTaken = new uint256[](wd.numItems == 0 ? 0 : (wd.numItems + 255) / 256);
+
+        // blocking decorations (M6): raw static bytes (2/blocker: tilex, tiley). They make
+        // their floor tile solid for movement (player TryMove + enemy TryWalk), checked in
+        // _actorTile. Immutable, so no packed state — read from the Map each tick like items.
+        wd.blockers = _readPtr(IMap(map).blockersPtr());
 
         // per-tile area map (WL_ACT1.C). Empty => single area 0. Apply SpawnDoor's
         // fixup: a door tile takes a side neighbor's area (`*map = *(map-1)`), so an
@@ -449,9 +455,25 @@ contract Engine {
         if (x < 0 || x >= int256(wd.w) || y < 0 || y >= int256(wd.h)) return 1; // OOB = solid
         uint256 v = _tile(wd, uint256(y) * wd.w + uint256(x));
         if (v & 0x80 != 0) {
-            if (wd.doors[v & 0x7f].action == DR_OPEN) return 0; // fully open: passable
+            if (wd.doors[v & 0x7f].action != DR_OPEN) return v; // door not fully open: solid
+            v = 0; // fully open: passable
         }
+        // a blocking decoration (M6) makes its floor tile solid, matching id marking statics
+        // in actorat — the sentinel 1 (< 128) reads as a solid wall to player TryMove and
+        // enemy CHECKSIDE/CHECKDIAG. Sight/bullets are unaffected (they read the tilemap).
+        if (v == 0 && wd.blockers.length != 0 && _isBlocker(wd, x, y)) return 1;
         return v;
+    }
+
+    /// Is there a blocking decoration on tile (x,y)? Scans the Map's blocker bytes
+    /// (2/blocker: tilex,tiley). Only reached for otherwise-passable tiles, so the scan
+    /// is rare; immutable level data, no packed state.
+    function _isBlocker(World memory wd, int256 x, int256 y) internal pure returns (bool) {
+        bytes memory b = wd.blockers;
+        for (uint256 i = 0; i < b.length; i += 2) {
+            if (int256(uint256(uint8(b[i]))) == x && int256(uint256(uint8(b[i + 1]))) == y) return true;
+        }
+        return false;
     }
 
     // ---------------- area connectivity (WL_ACT1.C) ----------------

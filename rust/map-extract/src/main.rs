@@ -152,6 +152,28 @@ fn bonus_item(t: u16) -> Option<u8> {
     STATINFO_BO.get(idx).copied().filter(|&bo| bo != 0)
 }
 
+/// WL_ACT1.C statinfo[] `block` flag per index: 1 = the static blocks movement (barrels,
+/// tables, lamps, pillars, plants, urns, armor, wells, stoves…), 0 = walk-over/walk-under
+/// dressing (puddle, chandelier, ceiling light, flat skeleton, junk, vines, bonuses). M6:
+/// only the blocking ones reach the contract (as `blockers`); the rest are render-only.
+const STATINFO_BLOCK: [u8; 48] = [
+    0, 1, 1, 1, 0, 1, 0, 1, // 0..7   (puddle, barrel, table, lamp, chandelier, hanged, alpo*, pillar)
+    1, 0, 1, 1, 1, 1, 0, 0, // 8..15  (tree, skel-flat, sink, plant, urn, table, ceil-light, kitchen)
+    1, 1, 1, 0, 0, 0, 1, 0, // 16..23 (armor, cage, skel-cage, skel-relax, key1*, key2*, stuff, stuff)
+    0, 0, 0, 0, 0, 0, 0, 0, // 24..31 (all bonus pickups)
+    0, 0, 0, 1, 1, 1, 0, 1, // 32..39 (bonus…, barrel, well, empty-well, gibs*, flag)
+    1, 0, 0, 0, 0, 1, 1, 0, // 40..47 (apogee, junk, junk, junk, pots, stove, spears, vines)
+];
+
+/// Is the plane-1 static at code `t` a blocking decoration (id's `block` flag)?
+fn is_blocking_static(t: u16) -> bool {
+    if t < 23 {
+        return false;
+    }
+    let idx = (t - 23) as usize;
+    idx < 48 && STATINFO_BLOCK[idx] != 0
+}
+
 /// Decorative (non-bonus) scenery static: lamps, pillars, tables, plants, skeletons…
 /// (M5.4). A plane-1 static (code 23..=70 → statinfo index 0..47) whose bonus is 0.
 /// Returns the **VSWAP sprite index** = SPR_STAT_0 (=2) + statindex, which the client
@@ -243,6 +265,7 @@ fn main() -> Result<()> {
     let mut guards: Vec<[u8; 4]> = Vec::new();
     let mut items: Vec<[u8; 3]> = Vec::new();
     let mut scenery: Vec<[u8; 3]> = Vec::new();
+    let mut blockers: Vec<[u8; 2]> = Vec::new(); // blocking statics (collision) — M6
     for y in 0..h {
         for x in 0..w {
             let t = plane1[y * w + x];
@@ -253,7 +276,10 @@ fn main() -> Result<()> {
             } else if let Some(bo) = bonus_item(t) {
                 items.push([x as u8, y as u8, bo]); // tilex, tiley, itemnumber
             } else if let Some(spr) = decoration_static(t) {
-                scenery.push([x as u8, y as u8, spr]); // tilex, tiley, VSWAP sprite index
+                scenery.push([x as u8, y as u8, spr]); // tilex, tiley, VSWAP sprite index (render)
+                if is_blocking_static(t) {
+                    blockers.push([x as u8, y as u8]); // tilex, tiley (movement collision)
+                }
             }
         }
     }
@@ -289,6 +315,7 @@ fn main() -> Result<()> {
     let guards_flat = flat(&guards.iter().map(|g| g.to_vec()).collect::<Vec<_>>());
     let doors_flat = flat(&doors.iter().map(|d| d.to_vec()).collect::<Vec<_>>());
     let items_flat = flat(&items.iter().map(|i| i.to_vec()).collect::<Vec<_>>());
+    let blockers_flat = flat(&blockers.iter().map(|b| b.to_vec()).collect::<Vec<_>>());
 
     // per-tile area number for sound localization: plane-0 floor codes >= AREATILE encode
     // the area (tile - AREATILE); walls/doors get 0 (the engine fixes up door tiles).
@@ -304,6 +331,7 @@ fn main() -> Result<()> {
         "doors": doors,             // [tilex, tiley, vertical|lock<<1] per door, in doornum order
         "items": items,             // [tilex, tiley, itemnumber] per bonus item
         "scenery": scenery,         // [tilex, tiley, sprite] decorative statics (client billboards; off-chain)
+        "blockers": blockers,       // [tilex, tiley] blocking statics (on-chain collision) — M6
         "areas": areas,             // per-tile area number (sound localization via ConnectAreas)
         // flat-bytes mirror of the arrays above, for script/Deploy.s.sol:
         "tilesHex": to_hex(&tiles),
@@ -311,17 +339,19 @@ fn main() -> Result<()> {
         "doorsHex": to_hex(&doors_flat),
         "itemsHex": to_hex(&items_flat),
         "areasHex": to_hex(&areas),
+        "blockersHex": to_hex(&blockers_flat),
     });
     if let Some(dir) = args.out.parent() {
         fs::create_dir_all(dir)?;
     }
     fs::write(&args.out, serde_json::to_vec_pretty(&level)?)?;
     println!(
-        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors, {} items, {} scenery -> {}",
+        "map-extract: \"{name}\" {w}x{h} — player @({sx},{sy}) dir {sdir}, {} guards, {} doors, {} items, {} scenery ({} blocking) -> {}",
         guards.len(),
         doors.len(),
         items.len(),
         scenery.len(),
+        blockers.len(),
         args.out.display()
     );
     Ok(())

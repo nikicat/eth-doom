@@ -62,5 +62,11 @@ run door_use door_room.txt 4 8 1
 "$ORACLE" oracle/maps/area_room.txt vectors/area_sound.input.txt 4 8 1 12 3 2 0 \
     > vectors/area_sound.golden.jsonl
 
+# block_static: player walks east into a blocking decoration (barrel at tile (8,8)) and is
+# stopped (TryMove); a guard at (12,8) wakes on gunfire, chases west, and must route around
+# the same barrel (TryWalk/CHECKSIDE) — exercises blocking-decoration collision (M6).
+"$ORACLE" oracle/maps/block_room.txt vectors/block_static.input.txt 4 8 1 12 8 2 0 \
+    > vectors/block_static.golden.jsonl
+
 echo "regenerated:"
 ls -l vectors/*.golden.jsonl

@@ -14,6 +14,7 @@ objtype  playerent;
 objtype *player = &playerent;
 
 unsigned char tilemap[MAPSIZE][MAPSIZE];
+unsigned char blockmap[MAPSIZE][MAPSIZE];
 
 int controlx, controly;
 int buttonstate[NUMBUTTONS];
@@ -100,6 +101,8 @@ int TryMove(objtype *ob)
                 } else {
                     return 0;       /* solid wall */
                 }
+            } else if (blockmap[x][y]) {
+                return 0;           /* blocking decoration (static in actorat) */
             }
         }
     return 1;

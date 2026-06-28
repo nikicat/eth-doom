@@ -976,6 +976,8 @@ void InitActors(void) {
         for (y = 0; y < MAPSIZE; y++)
             if (tilemap[x][y])
                 actorat[x][y] = (void *)(uintptr_t)tilemap[x][y];
+            else if (blockmap[x][y])
+                actorat[x][y] = (void *)(uintptr_t)1; /* blocking static: solid (temp<128) */
     (void)i;
 }
 
