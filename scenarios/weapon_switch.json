@@ -1,0 +1,7 @@
+{
+  "note": "walk over the MG then chaingun pickup (GiveWeapon auto-switches to each + grants 6 ammo), fire the chaingun at an SS (rate 4 — fast), switch back to the pistol (key 2, bestweapon stays chaingun) and fire (rate 14), then select the knife (key 1). Exercises the weapon roster: GiveWeapon, per-weapon fire rates, and switching (auto-on-pickup + keys 1/2). A connecting knife hit needs sub-tile range (nx > KNIFEDIST at tile granularity); the out-of-ammo->knife tail of kill_ss/kill_officer covers the KnifeAttack path.",
+  "map": "weapon_room.txt",
+  "player": { "x": 2, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "ss", "x": 13, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

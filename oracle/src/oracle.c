@@ -16,9 +16,11 @@
 static void emit(long tick)
 {
     printf("{\"tick\":%ld,\"x\":%ld,\"y\":%ld,\"angle\":%d,"
-           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d,\"health\":%d,\"ammo\":%d,\"acount\":%d",
+           "\"tilex\":%u,\"tiley\":%u,\"anglefrac\":%d,\"health\":%d,\"ammo\":%d,\"acount\":%d,"
+           "\"weapon\":%d,\"bestweapon\":%d",
            tick, (long)player->x, (long)player->y, player->angle,
-           player->tilex, player->tiley, anglefrac, health, ammo, attackcount);
+           player->tilex, player->tiley, anglefrac, health, ammo, attackcount,
+           weapon, bestweapon);
     if (numenemies > 0) {
         printf(",\"rng\":%d,\"guards\":[", rndindex);
         for (int i = 0; i < numenemies; i++) {
@@ -72,6 +74,8 @@ static void load_map(const char *path)
             else if (c == 'h') SpawnStatic(x, y, bo_firstaid); /* first-aid */
             else if (c == 'k') SpawnStatic(x, y, bo_key1);     /* gold key */
             else if (c == 't') SpawnStatic(x, y, bo_cross);    /* treasure */
+            else if (c == 'm') SpawnStatic(x, y, bo_machinegun); /* machine gun pickup */
+            else if (c == 'g') SpawnStatic(x, y, bo_chaingun);   /* chaingun pickup */
             else if (c == 'B') blockmap[x][y] = 1;             /* blocking decoration (barrel/table/…) */
             else if (c >= '0' && c <= '9') areamap[x][y] = c - '0'; /* floor, explicit area */
             /* else: floor, area 0 ('.', ' ') */

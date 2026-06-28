@@ -18,6 +18,12 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 - **Two-way combat** — the guard shoots the player (`T_Shoot` → `TakeDamage`, health drops); the
   player fires back (`GunAttack` → `DamageActor` → pain → `KillActor` death), with ammo + a fire
   cooldown.
+- **The full weapon roster** — knife, pistol, machine gun, chaingun (`weapon`/`bestweapon`, ownership
+  contiguous knife..best): keys 1-4 select an owned weapon (`CheckWeaponChange`), the MG/chaingun are
+  picked up (`GiveWeapon` → +6 ammo + auto-switch), and each fires differently — the knife is melee
+  (`KnifeAttack`), silent, and free; the guns spend a round and alert nearby guards; the MG/chaingun
+  fire faster (per-weapon cooldown standing in for id's `attackframe` loop-back); running out of ammo
+  forces the knife. The animation state machine stays a cooldown (the M2 deviation, now per-weapon).
 - **Doors + area connectivity** — sliding doors (`SpawnDoor`/`OperateDoor`/`MoveDoors`/`DoorOpening`/
   `DoorClosing`): the player opens the one they face with **Use** (`Cmd_Use`), a chasing guard opens a
   door in its path (`TryWalk` → `OpenDoor`) and waits for it (`T_Chase`), doors auto-close after
@@ -88,7 +94,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 
 | | status | scope |
 |---|---|---|
-| **M6** weapons & world completeness | ⬜ | weapon roster + switching (knife/pistol/MG/chaingun); pushwalls (secret walls); elevator + level exit + level→level flow; blocking-decoration collision (the M5 scenery is render-only until then) |
+| **M6** weapons & world completeness | 🟡 | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); next: **pushwalls** (secret walls), **elevator + level exit + level→level flow** |
 | **M7** audio | ⬜ | digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas |
 | **M8** presentation shell | ⬜ | title / menu / "Get Psyched!" / level-intermission tally / episode flow |
 | **M9** MegaETH deployment | ⛔ | deploy to MegaETH testnet; fire-and-forget session-key play at ~native rate; end-to-end latency + gas (needs an RPC + funded key) |
@@ -133,14 +139,14 @@ treatment (the `Door[]` build is most of that 62k), and cap/cull live actors.
 Per `DESIGN.md`: the C `sim_oracle` (carved from id's source) replays an input vector and emits
 per-tick **golden vectors**; the Rust harness deploys the contracts on anvil, replays the same
 inputs through `Session.submitInput`, and asserts the decoded state matches the golden vector
-**tic-by-tic** (player pose/health/ammo/keys/score, every guard field, every door's
+**tic-by-tic** (player pose/health/ammo/weapon/bestweapon/keys/score, every guard field, every door's
 position/action/ticcount, every item's taken bit, obclass, and the RNG index — over single-guard,
-multi-guard, SS, dog, officer, area-localization, and blocking-collision scenarios). All twelve
-scenarios pass.
+multi-guard, SS, dog, officer, area-localization, blocking-collision, and weapon-switching scenarios).
+All thirteen scenarios pass.
 
 The **wasm predictor is held to the same bar**: `oracle/verify_wasm.mjs` replays every golden
 scenario through `web/public/predict.wasm` and asserts its decoded packed state matches the golden
-vectors tic-by-tic (all twelve pass). So the same carved C is differential-verified compiled
+vectors tic-by-tic (all thirteen pass). So the same carved C is differential-verified compiled
 two ways — natively (`sim_oracle`, the ground truth) and to wasm (the browser predictor) — and the
 client additionally reconciles each predicted tick against `Session.getState()` live.
 

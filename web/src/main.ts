@@ -277,6 +277,7 @@ type State = {
   player: {
     x: number; y: number; angle: number; tilex: number; tiley: number;
     health: number; ammo: number; attackcount: number; keys: number; score: number;
+    weapon: number; bestweapon: number;
   };
   doors: Door[];
   itemsTaken: boolean[];
@@ -327,6 +328,8 @@ function decode(hex: string): State {
       attackcount: sfld(pw, 160, 16),
       keys: fld(pw, 184, 8),
       score: fld(pw, 192, 32),
+      weapon: fld(pw, 224, 8),
+      bestweapon: fld(pw, 232, 8),
     },
     doors,
     itemsTaken,
@@ -526,7 +529,8 @@ let assets: Assets | null = null;
 // (KNIFEPIC..GATLINGGUNPIC, 48×24) are 97–100 — id's GFXV_WL1.H enum +2, matching the
 // other indices (STATUSBARPIC enum 90→92). The sim has only the pistol, so we draw GUNPIC.
 const PIC_STATUSBAR = 92, PIC_DIGIT0 = 105, PIC_FACE1A = 115;
-const PIC_KNIFE = 97, PIC_GUN = 98; // weapon HUD pics (M6 adds switching → MG 99 / chaingun 100)
+// weapon HUD pics, contiguous KNIFEPIC+weapon: knife 97, pistol 98, MG 99, chaingun 100.
+const PIC_KNIFE = 97, PIC_GUN = 98, PIC_MACHINEGUN = 99, PIC_CHAINGUN = 100;
 
 const tmp = document.createElement("canvas");
 tmp.width = tmp.height = 64;
@@ -607,7 +611,7 @@ async function loadAssets(): Promise<Assets | null> {
   uniq.forEach((i, k) => { if (loaded[k]) sprites.set(i, loaded[k]!); });
   // HUD pics: status bar + weapon slot (knife/gun) + digits (105–114) + BJ faces (115–138)
   const pics = new Map<number, HTMLCanvasElement>();
-  const picIds = [PIC_STATUSBAR, PIC_KNIFE, PIC_GUN];
+  const picIds = [PIC_STATUSBAR, PIC_KNIFE, PIC_GUN, PIC_MACHINEGUN, PIC_CHAINGUN];
   for (let i = PIC_DIGIT0; i <= 114; i++) picIds.push(i);
   for (let i = PIC_FACE1A; i <= 138; i++) picIds.push(i);
   const picLoaded = await Promise.all(picIds.map((i) => loadImgRaw(`/wolf/pic_${p3(i)}.png`)));
@@ -1109,9 +1113,9 @@ function renderHudReal(s: State, A: Assets, clock: number) {
   const face = A.pics.get(PIC_FACE1A + level * 3 + look) ?? A.pics.get(PIC_FACE1A);
   if (face) hctx.drawImage(face, 0, 0, 24, 32, 17 * 8 * S, 4 * S, 24 * S, 32 * S);
 
-  // weapon slot — the held weapon (pistol; the sim has no weapon switching, that's M6).
-  // Wolf3D's DrawWeapon: StatusDrawPic(32,8, KNIFEPIC+weapon) → tile x=32 (256px), y=8.
-  const weap = A.pics.get(PIC_GUN);
+  // weapon slot — the held weapon (M6: real switching). Wolf3D's DrawWeapon:
+  // StatusDrawPic(32,8, KNIFEPIC+weapon) → tile x=32 (256px), y=8.
+  const weap = A.pics.get(PIC_KNIFE + s.player.weapon) ?? A.pics.get(PIC_GUN);
   if (weap) hctx.drawImage(weap, 0, 0, 48, 24, 32 * 8 * S, 8 * S, 48 * S, 24 * S);
 }
 
@@ -1231,6 +1235,8 @@ function cmd() {
   }
   if (keys.has(" ")) buttons |= 1; // BT_ATTACK
   if (keys.has("e")) buttons |= 8; // BT_USE (open/close the door you face)
+  // weapon select: keys 1-4 -> bt_readyknife..bt_readychaingun (buttons bits 4-7)
+  for (let wpn = 0; wpn < 4; wpn++) if (keys.has(String(wpn + 1))) buttons |= 1 << (4 + wpn);
   return { controlx: BigInt(controlx), controly: BigInt(controly), buttons };
 }
 

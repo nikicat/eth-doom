@@ -30,10 +30,17 @@ contract Engine {
     int256 internal constant FOCALLENGTH = 0x5700;
     int256 internal constant ACTORSIZE = 0x4000;
     int256 internal constant ATTACKRATE = 14;
+    int256 internal constant KNIFEDIST = 0x18000; // WL_AGENT.C KnifeAttack melee reach (transx)
     int256 internal constant STARTAMMO = 8;
     int256 internal constant TICS = 1;
     uint8 internal constant BT_STRAFE = 0x02;
     uint8 internal constant BT_USE = 3; // buttons bit index
+    uint8 internal constant BT_READYKNIFE = 4; // buttons 4..7 = bt_readyknife..bt_readychaingun
+    // WL_DEF.H weapontype. Ownership is contiguous WP_KNIFE..bestweapon (CheckWeaponChange).
+    uint256 internal constant WP_KNIFE = 0;
+    uint256 internal constant WP_PISTOL = 1;
+    uint256 internal constant WP_MACHINEGUN = 2;
+    uint256 internal constant WP_CHAINGUN = 3;
 
     // --- doors (WL_ACT1.C / WL_DEF.H) ---
     uint256 internal constant OPENTICS = 300;
@@ -139,6 +146,8 @@ contract Engine {
         uint256 useheld; // buttonheld[bt_use] edge latch
         uint256 keys; // gamestate.keys bitmask (bo_key1..4 -> bits 0..3)
         int256 score; // gamestate.score
+        uint256 weapon; // gamestate.weapon (wp_*); current
+        uint256 bestweapon; // gamestate.bestweapon (highest owned)
     }
 
     // Bonus items are NOT a struct array: their static data (3 bytes each: tilex,
@@ -218,6 +227,8 @@ contract Engine {
         wd.p.tiley = uint256(wd.p.y >> 16);
         wd.p.health = 100;
         wd.p.ammo = STARTAMMO;
+        wd.p.weapon = WP_PISTOL; // NewGame: start with the pistol
+        wd.p.bestweapon = WP_PISTOL;
 
         bytes memory guards = IMap(map).guards(); // 4 bytes each: tilex,tiley,dir,class
         uint256 n = guards.length / 4;
@@ -659,6 +670,16 @@ contract Engine {
         if (wd.p.ammo > 99) wd.p.ammo = 99;
     }
 
+    /// WL_AGENT.C GiveWeapon — +6 ammo; if better than what you hold, becomes the
+    /// current + best weapon (ownership stays contiguous WP_KNIFE..bestweapon).
+    function _giveWeapon(World memory wd, uint256 w) internal pure {
+        _giveAmmo(wd, 6);
+        if (wd.p.bestweapon < w) {
+            wd.p.bestweapon = w;
+            wd.p.weapon = w;
+        }
+    }
+
     /// Apply one bonus to the player; return true if it was consumed (remove it).
     function _getBonus(World memory wd, uint256 n) internal pure returns (bool) {
         if (n == BO_FIRSTAID) {
@@ -683,8 +704,10 @@ contract Engine {
         } else if (n == BO_25CLIP) {
             if (wd.p.ammo == 99) return false;
             _giveAmmo(wd, 25);
-        } else if (n == BO_MACHINEGUN || n == BO_CHAINGUN) {
-            _giveAmmo(wd, 6); // GiveWeapon -> GiveAmmo(6); weapon switch dropped
+        } else if (n == BO_MACHINEGUN) {
+            _giveWeapon(wd, WP_MACHINEGUN);
+        } else if (n == BO_CHAINGUN) {
+            _giveWeapon(wd, WP_CHAINGUN);
         } else if (n == BO_FULLHEAL) {
             _healSelf(wd, 99);
             _giveAmmo(wd, 25);
@@ -1134,14 +1157,43 @@ contract Engine {
         if (wd.p.health <= 0) wd.p.health = 0;
     }
 
-    /// Player firing: a cooldown replaces the weapon animation (Cmd_Fire/T_Attack).
+    /// Per-weapon fire cooldown (replaces id's attackframe loop-back). knife/pistol =
+    /// ATTACKRATE; the machinegun/chaingun fire faster.
+    function _weaponRate(uint256 w) internal pure returns (int256) {
+        if (w == WP_MACHINEGUN) return 8;
+        if (w == WP_CHAINGUN) return 4;
+        return ATTACKRATE; // knife, pistol
+    }
+
+    /// WL_AGENT.C CheckWeaponChange — keys 1-4 (buttons BT_READYKNIFE..+3) select an
+    /// owned weapon (WP_KNIFE..bestweapon). With no ammo you're locked to the knife.
+    function _checkWeaponChange(World memory wd, Cmd calldata cmd) internal pure {
+        if (wd.p.ammo == 0) return;
+        for (uint256 i = WP_KNIFE; i <= wd.p.bestweapon; i++) {
+            if (((cmd.buttons >> (BT_READYKNIFE + i - WP_KNIFE)) & 1) != 0) {
+                wd.p.weapon = i;
+                return;
+            }
+        }
+    }
+
+    /// Player firing — the Cmd_Fire/T_Attack/attackinfo animation is modeled as a per-tic
+    /// cooldown, now PER WEAPON: the knife swings free + silent at melee range; the guns
+    /// spend a round and alert guards; the MG/chaingun fire faster; out of ammo forces the
+    /// knife (T_Attack case -1). The pistol path is unchanged from the single-weapon model.
     function _playerAttack(World memory wd, Cmd calldata cmd) internal pure {
+        _checkWeaponChange(wd, cmd);
         if (wd.p.attackcount > 0) wd.p.attackcount -= 1;
-        if ((cmd.buttons & 1) != 0 && wd.p.attackcount == 0 && wd.p.ammo > 0) {
+        if ((cmd.buttons & 1) == 0 || wd.p.attackcount != 0) return; // bt_attack held + ready
+        if (wd.p.weapon == WP_KNIFE) {
+            _knifeAttack(wd);
+            wd.p.attackcount = _weaponRate(WP_KNIFE);
+        } else if (wd.p.ammo > 0) {
             wd.p.ammo -= 1;
             wd.madenoise = true; // firing alerts guards in the area
             _gunAttack(wd);
-            wd.p.attackcount = ATTACKRATE;
+            wd.p.attackcount = _weaponRate(wd.p.weapon);
+            if (wd.p.ammo == 0) wd.p.weapon = WP_KNIFE; // out of ammo -> knife
         }
     }
 
@@ -1149,7 +1201,11 @@ contract Engine {
     /// here the aim is computed from sim state — closest shootable actor in front
     /// (depth nx >= MINDIST via the view rotation) with clear LOS. Damage/miss
     /// math is faithful; the screen-pixel `shootdelta` cone is dropped (render-specific).
-    function _gunAttack(World memory wd) internal pure {
+    /// Render-decoupled target pick: the closest shootable actor in front
+    /// (nx in [MINDIST, maxnx]) with clear LOS, or -1. GunAttack passes no range cap;
+    /// KnifeAttack caps at melee reach (KNIFEDIST). The render-derived viewx/FL_VISABLE
+    /// target + screen-pixel `shootdelta` cone are dropped (render-specific).
+    function _findShotTarget(World memory wd, int256 maxnx) internal pure returns (int256 closest) {
         uint256 va = uint256(wd.p.angle);
         uint32 viewcosR = Trig.cosAt(wd.trig, va);
         uint32 viewsinR = Trig.sinAt(wd.trig, va);
@@ -1157,19 +1213,23 @@ contract Engine {
         int256 viewy = wd.p.y + Fixed.fixedByFrac(FOCALLENGTH, viewsinR);
 
         int256 bestnx = type(int256).max;
-        int256 closest = -1;
+        closest = -1;
         for (uint256 i = 0; i < wd.actors.length; i++) {
             Actor memory e = wd.actors[i];
             if ((e.flags & FL_SHOOTABLE) == 0) continue;
             int256 nx = Fixed.fixedByFrac(e.x - viewx, viewcosR)
                 - Fixed.fixedByFrac(e.y - viewy, viewsinR) - ACTORSIZE;
-            if (nx < MINDIST) continue;
+            if (nx < MINDIST || nx > maxnx) continue;
             if (!_checkLine(wd, e)) continue;
             if (nx < bestnx) {
                 bestnx = nx;
                 closest = int256(i);
             }
         }
+    }
+
+    function _gunAttack(World memory wd) internal pure {
+        int256 closest = _findShotTarget(wd, type(int256).max);
         if (closest < 0) return;
 
         Actor memory c = wd.actors[uint256(closest)];
@@ -1184,6 +1244,13 @@ contract Engine {
             damage = int256(_rnd(wd)) / 6;
         }
         _damageActor(c, damage);
+    }
+
+    /// WL_AGENT.C KnifeAttack — melee within KNIFEDIST, silent + free (no ammo).
+    function _knifeAttack(World memory wd) internal pure {
+        int256 closest = _findShotTarget(wd, KNIFEDIST);
+        if (closest < 0) return;
+        _damageActor(wd.actors[uint256(closest)], int256(_rnd(wd)) >> 4);
     }
 
     /// WL_STATE.C DamageActor (guard is in attack mode here: no double-damage / FirstSighting).
@@ -1472,7 +1539,8 @@ contract Engine {
     // header: rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24
     // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
     //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 |
-    //         useheld:bit@176 | keys:uint8@184 | score:uint32@192
+    //         useheld:bit@176 | keys:uint8@184 | score:uint32@192 | weapon:uint8@224 |
+    //         bestweapon:uint8@232
     // door:   action:uint8@0 | ticcount:int16@16 | position:uint16@32 | doornum:uint8@48
     //         (ONLY non-closed doors are stored; a closed door is the all-zero default that
     //          _load reconstructs. Decoders default every door closed, then apply these by doornum.)
@@ -1588,6 +1656,8 @@ contract Engine {
         w |= (p.useheld & 1) << 176;
         w |= (p.keys & 0xff) << 184;
         w |= uint256(uint32(int32(p.score))) << 192;
+        w |= (p.weapon & 0xff) << 224;
+        w |= (p.bestweapon & 0xff) << 232;
     }
 
     function _unpackPlayer(uint256 w) internal pure returns (Player memory p) {
@@ -1603,6 +1673,8 @@ contract Engine {
         p.useheld = (w >> 176) & 1;
         p.keys = (w >> 184) & 0xff;
         p.score = int256(int32(uint32(w >> 192)));
+        p.weapon = (w >> 224) & 0xff;
+        p.bestweapon = (w >> 232) & 0xff;
     }
 
     function _packActor(Actor memory a) internal pure returns (uint256 w) {

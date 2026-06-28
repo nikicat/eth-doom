@@ -53,7 +53,15 @@ enum {
 #define bt_strafe 1
 #define bt_run    2
 #define bt_use    3
+/* weapon-select buttons (WL_DEF.H bt_readyknife..bt_readychaingun) — keys 1-4 */
+#define bt_readyknife      4
+#define bt_readypistol     5
+#define bt_readymachinegun 6
+#define bt_readychaingun   7
 #define NUMBUTTONS 8
+
+/* WL_DEF.H weapontype. Ownership is contiguous wp_knife..bestweapon (CheckWeaponChange). */
+enum { wp_knife, wp_pistol, wp_machinegun, wp_chaingun };
 
 /* --- enemy AI constants (WL_DEF.H / WL_STATE.C) --- */
 #define UNSIGNEDSHIFT 8           /* 1/256-tile precision */
@@ -63,6 +71,7 @@ enum {
 #define FOCALLENGTH   0x5700L     /* view focal point offset (WL_MAIN.C) */
 #define ACTORSIZE     0x4000L     /* TransformActor shape fudge (WL_DRAW.C) */
 #define ATTACKRATE    14          /* PoC fire cooldown (replaces the weapon anim) */
+#define KNIFEDIST     0x18000L    /* WL_AGENT.C KnifeAttack melee reach (transx) */
 #define STARTAMMO     8
 /* actor flags */
 #define FL_SHOOTABLE   1
@@ -161,6 +170,7 @@ extern long  playerxmove, playerymove;
 extern long  thrustspeed;               /* total player thrust this tic (T_Shoot) */
 extern int   health, playerdead;        /* gamestate.health; ex_died flag */
 extern int   ammo, attackcount;         /* gamestate.ammo; fire cooldown */
+extern int   weapon, bestweapon;         /* gamestate.weapon/bestweapon (wp_*) */
 extern int   madenoise;                 /* player fired this tic (alerts guards) */
 
 extern objtype  playerent;

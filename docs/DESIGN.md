@@ -51,7 +51,7 @@ Session  per-game packed world state                    raycaster view       gol
 - **header**: `rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24`
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
   tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176 |
-  keys:uint8@184 | score:uint32@192`
+  keys:uint8@184 | score:uint32@192 | weapon:uint8@224 | bestweapon:uint8@232`
 - **door** (sparse — only non-closed doors get a word): `action:uint8@0 | ticcount:int16@16 |
   position:uint16@32 | doornum:uint8@48`. A closed door is the all-zero default the engine
   reconstructs, so on a level of mostly-shut doors the blob carries almost none. Static tilex/tiley/
@@ -97,8 +97,18 @@ are deviations from id's *render-coupled* code, not between our two implementati
   `FL_VISABLE`). We instead pick the closest shootable actor that is **in front** (depth `nx ≥ MINDIST`
   via the same view rotation the renderer uses) with **clear line-of-sight**. Damage/miss math is
   faithful; only the screen-pixel `shootdelta` cone (render-config-specific) is dropped.
-- **Weapon animation → cooldown.** The `Cmd_Fire`/`T_Attack`/`attackinfo` weapon state machine is
-  replaced by a simple per-tick fire cooldown (`ATTACKRATE`).
+- **Weapon animation → per-weapon cooldown.** The `Cmd_Fire`/`T_Attack`/`attackinfo` weapon state
+  machine is replaced by a per-tick fire cooldown — now PER WEAPON: the knife/pistol use `ATTACKRATE`,
+  the machine gun/chaingun fire faster (their lower cooldowns stand in for id's `attackframe` loop-back
+  that auto-repeats while the trigger is held). `weapon`/`bestweapon` are packed (ownership is
+  contiguous `wp_knife..bestweapon`, per `CheckWeaponChange`); keys 1-4 select a weapon, `GiveWeapon`
+  (MG/chaingun pickup) grants +6 ammo and auto-switches, and out-of-ammo forces the knife (`T_Attack`
+  case -1). The knife (`KnifeAttack`) is melee + silent + free; the guns spend a round and `madenoise`.
+  Both share the render-decoupled target pick of `GunAttack` (closest shootable in front with LOS), the
+  knife capped at melee reach `KNIFEDIST` (id's `transx ≤ 0x18000`). One artifact: that depth `nx`
+  (offset by `FOCALLENGTH`, as id's `transx` is) puts a tile-adjacent enemy just beyond `KNIFEDIST`, so
+  a connecting knife hit needs sub-tile range — the differential exercises `KnifeAttack` via the
+  out-of-ammo→knife tail of `kill_ss`/`kill_officer`.
 - **Pickups trigger on the player's tile.** id picks up a bonus during the 3D refresh, when its tile
   transforms onto the player (`WL_DRAW.C` `TransformTile`). Headless there's no refresh, so a bonus is
   taken when `player tile == item tile` — an identical-on-both-sides choice, like `FL_VISABLE`. The

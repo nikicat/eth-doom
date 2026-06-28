@@ -60,6 +60,8 @@ EXPORT void reset(void) {
      * useheld via InitDoorList, anglefrac via SpawnPlayer.) */
     health = 100;
     ammo = STARTAMMO;
+    weapon = wp_pistol;
+    bestweapon = wp_pistol;
     attackcount = 0;
     playerdead = 0;
     memset(tilemap, 0, sizeof tilemap);
@@ -87,6 +89,8 @@ EXPORT void setup_tile(int x, int y, int ch) {
         case 'h': SpawnStatic(x, y, bo_firstaid); break;
         case 'k': SpawnStatic(x, y, bo_key1); break;
         case 't': SpawnStatic(x, y, bo_cross); break;
+        case 'm': SpawnStatic(x, y, bo_machinegun); break;
+        case 'g': SpawnStatic(x, y, bo_chaingun); break;
         case 'B': blockmap[x][y] = 1; break; /* blocking decoration */
         default: if (ch >= '0' && ch <= '9') areamap[x][y] = ch - '0'; break; /* floor / area digit */
     }
@@ -155,6 +159,8 @@ EXPORT int read_state(void) {
     put(pw, 176, 1, useheld & 1);
     put(pw, 184, 8, keys & 0xff);
     put(pw, 192, 32, (unsigned int)score);
+    put(pw, 224, 8, weapon & 0xff);
+    put(pw, 232, 8, bestweapon & 0xff);
 
     /* active (non-closed) doors, in doornum order, each carrying doornum@48 */
     int slot = 0;

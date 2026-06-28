@@ -17,6 +17,7 @@ long     thrustspeed;
 int      health = 100;   /* gamestate.health */
 int      playerdead;     /* playstate == ex_died */
 int      ammo = STARTAMMO;
+int      weapon = wp_pistol, bestweapon = wp_pistol; /* NewGame: start with the pistol */
 int      attackcount;    /* fire cooldown */
 int      madenoise;      /* player fired this tic (alerts guards in the area) */
 
@@ -550,6 +551,14 @@ static void HealSelf(int points) { health += points; if (health > 100) health = 
 static void GiveAmmo(int n)      { ammo += n; if (ammo > 99) ammo = 99; }
 static void GivePoints(long pts) { score += pts; }   /* extra-life thresholds dropped */
 
+/* WL_AGENT.C GiveWeapon — a weapon pickup grants 6 ammo and, if it's better than what
+ * you have, becomes the current + best weapon (ownership stays contiguous knife..best).
+ * chosenweapon is dropped: the cooldown model switches instantly, so weapon==chosenweapon. */
+static void GiveWeapon(int w) {
+    GiveAmmo(6);
+    if (bestweapon < w) bestweapon = weapon = w;
+}
+
 /* Apply one bonus to the player; return 1 if it was consumed (remove it). */
 static int GetBonus(statobj_t *check) {
     switch (check->itemnumber) {
@@ -563,8 +572,8 @@ static int GetBonus(statobj_t *check) {
     case bo_clip:       if (ammo == 99) return 0; GiveAmmo(8);  break;
     case bo_clip2:      if (ammo == 99) return 0; GiveAmmo(4);  break;
     case bo_25clip:     if (ammo == 99) return 0; GiveAmmo(25); break;
-    case bo_machinegun:
-    case bo_chaingun:   GiveAmmo(6); break;   /* GiveWeapon -> GiveAmmo(6); switch dropped */
+    case bo_machinegun: GiveWeapon(wp_machinegun); break;
+    case bo_chaingun:   GiveWeapon(wp_chaingun);   break;
     case bo_fullheal:   HealSelf(99); GiveAmmo(25); break;
     case bo_food:       if (health == 100) return 0; HealSelf(10); break;
     case bo_alpo:       if (health == 100) return 0; HealSelf(4);  break;
@@ -833,12 +842,13 @@ static void DamageActor(objtype *ob, int damage) {
         NewState(ob, (ob->hitpoints & 1) ? S_GRDPAIN : S_GRDPAIN1);
 }
 
-/* WL_AGENT.C GunAttack — player hitscan. The original picks the on-screen target via
- * viewx/FL_VISABLE (render-derived); here the aim is computed from sim state: the
- * closest shootable actor that is in front (depth nx >= MINDIST via the view rotation)
- * with a clear line of sight. The screen-pixel `shootdelta` cone is the one part
- * dropped (it's render-config-specific). Damage/miss math is faithful. */
-static void GunAttack(void) {
+/* WL_AGENT.C target selection, render-decoupled. The original picks the on-screen
+ * target via viewx/FL_VISABLE (render-derived); here the aim is computed from sim state:
+ * the closest shootable actor that is in front (depth nx >= MINDIST via the view
+ * rotation) within `maxnx`, with a clear line of sight. The screen-pixel `shootdelta`
+ * cone is dropped (render-config-specific). GunAttack passes no range cap; KnifeAttack
+ * caps at melee reach (KNIFEDIST). */
+static objtype *FindShotTarget(long maxnx) {
     int   va = player->angle;
     fixed viewsin = sintable[va], viewcos = costable[va];
     fixed viewx = player->x - FixedByFrac(FOCALLENGTH, viewcos);
@@ -851,10 +861,17 @@ static void GunAttack(void) {
         if (!(e->flags & FL_SHOOTABLE)) continue;
         fixed gx = e->x - viewx, gy = e->y - viewy;
         fixed nx = FixedByFrac(gx, viewcos) - FixedByFrac(gy, viewsin) - ACTORSIZE;
-        if (nx < MINDIST) continue;     /* behind / too close */
-        if (!CheckLine(e)) continue;    /* line of sight blocked */
+        if (nx < MINDIST || nx > maxnx) continue; /* behind / too close / out of reach */
+        if (!CheckLine(e)) continue;              /* line of sight blocked */
         if (nx < bestnx) { bestnx = nx; closest = e; }
     }
+    return closest;
+}
+
+/* WL_AGENT.C GunAttack — player hitscan. Damage/miss math is faithful (distance +
+ * US_RndT); only the render-derived target pick is adapted (see FindShotTarget). */
+static void GunAttack(void) {
+    objtype *closest = FindShotTarget(0x7fffffffL);
     if (!closest) return;
 
     int dx = abs((int)closest->tilex - (int)player->tilex);
@@ -870,14 +887,41 @@ static void GunAttack(void) {
     DamageActor(closest, damage);
 }
 
-/* Player firing: a simple cooldown replaces the weapon animation (Cmd_Fire/T_Attack). */
+/* WL_AGENT.C KnifeAttack — melee: hit the closest in-front actor within KNIFEDIST.
+ * Silent (no madenoise) and free (no ammo), unlike the guns. */
+static void KnifeAttack(void) {
+    objtype *closest = FindShotTarget(KNIFEDIST);
+    if (!closest) return;
+    DamageActor(closest, US_RndT() >> 4);
+}
+
+/* WL_AGENT.C CheckWeaponChange — keys 1-4 (bt_readyknife..bt_readychaingun) select an
+ * owned weapon (knife..bestweapon). With no ammo you're locked to the knife. */
+static void CheckWeaponChange(int buttons) {
+    if (!ammo) return;
+    for (int i = wp_knife; i <= bestweapon; i++)
+        if (buttons & (1 << (bt_readyknife + i - wp_knife))) { weapon = i; return; }
+}
+
+/* Player firing. The Cmd_Fire/T_Attack/attackinfo weapon animation is still modeled as a
+ * per-tic cooldown, now PER WEAPON: the knife swings free + silent at melee range; the
+ * guns spend a round and alert guards; the machinegun/chaingun fire faster (their lower
+ * cooldowns stand in for id's attackframe loop-back). Out of ammo forces the knife
+ * (T_Attack case -1). The pistol path is unchanged from the single-weapon model. */
+static const int weaponrate[4] = { ATTACKRATE, ATTACKRATE, 8, 4 }; /* knife,pistol,MG,chaingun */
 void PlayerAttack(int buttons) {
+    CheckWeaponChange(buttons);
     if (attackcount > 0) attackcount--;
-    if ((buttons & 1) && attackcount == 0 && ammo > 0) { /* bt_attack = bit 0 */
+    if (!(buttons & 1) || attackcount != 0) return; /* bt_attack held + cooldown ready */
+    if (weapon == wp_knife) {
+        KnifeAttack();
+        attackcount = weaponrate[wp_knife];
+    } else if (ammo > 0) {
         ammo--;
         madenoise = 1;          /* firing alerts guards in the area */
         GunAttack();
-        attackcount = ATTACKRATE;
+        attackcount = weaponrate[weapon];
+        if (ammo == 0) weapon = wp_knife; /* out of ammo -> knife */
     }
 }
 

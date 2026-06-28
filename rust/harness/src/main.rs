@@ -50,6 +50,8 @@ struct Snap {
     items: Vec<i64>,       // taken (0/1) per item
     keys: i64,
     score: i64,
+    weapon: i64,
+    bestweapon: i64,
 }
 
 fn load_golden(path: &str) -> Result<Vec<Snap>> {
@@ -86,6 +88,8 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
             items,
             keys: v.get("keys").and_then(|x| x.as_i64()).unwrap_or(0),
             score: v.get("score").and_then(|x| x.as_i64()).unwrap_or(0),
+            weapon: v.get("weapon").and_then(|x| x.as_i64()).unwrap_or(1),
+            bestweapon: v.get("bestweapon").and_then(|x| x.as_i64()).unwrap_or(1),
         });
     }
     Ok(out)
@@ -127,6 +131,8 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>,
                 b'h' => items.extend_from_slice(&item(5)),  // bo_firstaid
                 b'k' => items.extend_from_slice(&item(6)),  // bo_key1
                 b't' => items.extend_from_slice(&item(10)), // bo_cross
+                b'm' => items.extend_from_slice(&item(16)), // bo_machinegun
+                b'g' => items.extend_from_slice(&item(17)), // bo_chaingun
                 b'B' => blockers.extend_from_slice(&[x as u8, y as u8]), // blocking decoration
                 b'0'..=b'9' => areas[(y * w + x) as usize] = c - b'0', // floor, explicit area
                 _ => {}
@@ -185,6 +191,11 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     let score = field(pw, 192, 32) as i64;
     if keys != want.keys || score != want.score {
         bail!("tic {tick} KEYS/SCORE mismatch: got keys {keys} score {score}, want {} {}", want.keys, want.score);
+    }
+    let weapon = field(pw, 224, 8) as i64;
+    let bestweapon = field(pw, 232, 8) as i64;
+    if weapon != want.weapon || bestweapon != want.bestweapon {
+        bail!("tic {tick} WEAPON mismatch: got weapon {weapon} best {bestweapon}, want {} {}", want.weapon, want.bestweapon);
     }
     if let Some(wr) = want.rng {
         if rnd != wr {

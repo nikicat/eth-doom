@@ -1,0 +1,84 @@
+# weapon_switch: walk over the MG then chaingun pickup (GiveWeapon auto-switches to each),
+# fire the chaingun at an SS (rate 4 — fast), switch back to the pistol (key 2) and fire
+# (rate 14), then select the knife (key 1) and swing (silent; the SS is out of melee reach).
+# Exercises GiveWeapon, per-weapon fire rates, and weapon switching (auto + keys 1/2). A
+# connecting knife hit needs sub-tile range (nx>KNIFEDIST at tile granularity); the
+# out-of-ammo->knife tail of kill_ss/kill_officer covers the KnifeAttack path.
+# format: controlx controly buttons (attack=1; select knife=16 pistol=32 MG=64 chaingun=128).
+# corridor on row 8; spawn (2,8) E; SS (13,8); m=MG@(8,8) g=chaingun@(9,8).
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 -90 0
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 32
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 16
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
+0 0 1
