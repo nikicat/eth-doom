@@ -1,0 +1,7 @@
+{
+  "note": "a guard across the closed door wakes on the player's gunfire (noise), chases, bumps the door (TryWalk->OpenDoor), waits for it (T_Chase), then comes through.",
+  "map": "door_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "guard", "x": 12, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

@@ -242,54 +242,79 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     Ok(())
 }
 
+/// A differential scenario, auto-discovered from a `scenarios/<name>.json` file —
+/// the single source of truth shared with `oracle/gen_vectors.sh` and
+/// `oracle/verify_wasm.mjs` (T1). Adding a test is "drop a file", no edits here.
+struct Scenario {
+    name: String,
+    map: String,    // repo-relative, e.g. "oracle/maps/test_room.txt"
+    input: String,  // repo-relative, e.g. "vectors/move_basic.input.txt"
+    golden: String, // repo-relative, e.g. "vectors/move_basic.golden.jsonl"
+    spawn: (u64, u64, u64),        // player tilex, tiley, dir
+    guards: Vec<u8>,               // tilex, tiley, dir, class — 4 bytes per enemy
+    checkpoints: Option<Vec<i64>>, // None = assert every tic; Some = only these tics
+}
+
+/// Enemy class name -> spawn byte (must match the oracle enum en_guard/officer/ss/dog).
+fn class_byte(name: &str) -> Result<u8> {
+    Ok(match name {
+        "guard" => 0,
+        "officer" => 1,
+        "ss" => 2,
+        "dog" => 3,
+        other => bail!("unknown enemy class: {other}"),
+    })
+}
+
+/// Discover and parse every `scenarios/*.json` (sorted by name for stable output).
+fn discover_scenarios() -> Result<Vec<Scenario>> {
+    let mut paths: Vec<PathBuf> = fs::read_dir(repo("scenarios"))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    let mut out = Vec::new();
+    for path in paths {
+        let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let cfg: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+        let req = |v: &Value, k: &str| v[k].as_u64().ok_or_else(|| anyhow!("{name}: missing {k}"));
+        let map = format!("oracle/maps/{}", cfg["map"].as_str().ok_or_else(|| anyhow!("{name}: missing map"))?);
+        let input = cfg["input"].as_str().map(String::from).unwrap_or_else(|| format!("vectors/{name}.input.txt"));
+        let golden = format!("vectors/{name}.golden.jsonl");
+        let p = &cfg["player"];
+        let spawn = (req(p, "x")?, req(p, "y")?, req(p, "dir")?);
+        let mut guards = Vec::new();
+        if let Some(es) = cfg["enemies"].as_array() {
+            for e in es {
+                guards.push(req(e, "x")? as u8);
+                guards.push(req(e, "y")? as u8);
+                guards.push(req(e, "dir")? as u8);
+                guards.push(class_byte(e["class"].as_str().ok_or_else(|| anyhow!("{name}: enemy.class"))?)?);
+            }
+        }
+        // "all" (or absent) -> every tic; an explicit array -> only those tics.
+        let checkpoints = cfg["checkpoints"].as_array().map(|a| a.iter().filter_map(|v| v.as_i64()).collect());
+        out.push(Scenario { name, map, input, golden, spawn, guards, checkpoints });
+    }
+    Ok(out)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let provider = ProviderBuilder::new().connect_anvil_with_wallet();
     let engine = eng::Engine::deploy(provider.clone()).await?;
 
-    // (name, map, input, golden, spawn, guards bytes)
-    let scenarios: &[(&str, &str, &str, &str, (u64, u64, u64), Vec<u8>)] = &[
-        // guard spawn bytes: tilex, tiley, dir, class (0 = en_guard, 2 = en_ss)
-        ("move_basic", "oracle/maps/test_room.txt", "vectors/move_basic.input.txt",
-         "vectors/move_basic.golden.jsonl", (8, 8, 1), vec![]),
-        ("chase_guard", "oracle/maps/test_room.txt", "vectors/chase_guard.input.txt",
-         "vectors/chase_guard.golden.jsonl", (8, 8, 1), vec![12, 8, 2, 0]),
-        ("kill_guard", "oracle/maps/test_room.txt", "vectors/kill_guard.input.txt",
-         "vectors/kill_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 0]),
-        ("door_use", "oracle/maps/door_room.txt", "vectors/door_use.input.txt",
-         "vectors/door_use.golden.jsonl", (4, 8, 1), vec![]),
-        ("door_guard", "oracle/maps/door_room.txt", "vectors/door_guard.input.txt",
-         "vectors/door_guard.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 0]),
-        ("item_pickup", "oracle/maps/item_room.txt", "vectors/item_pickup.input.txt",
-         "vectors/item_pickup.golden.jsonl", (2, 8, 1), vec![13, 8, 2, 0]),
-        ("two_guards", "oracle/maps/test_room.txt", "vectors/two_guards.input.txt",
-         "vectors/two_guards.golden.jsonl", (2, 8, 1), vec![10, 8, 2, 0, 11, 8, 2, 0]),
-        ("kill_ss", "oracle/maps/test_room.txt", "vectors/kill_ss.input.txt",
-         "vectors/kill_ss.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 2]),
-        ("dog_bite", "oracle/maps/test_room.txt", "vectors/dog_bite.input.txt",
-         "vectors/dog_bite.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 3]),
-        ("kill_officer", "oracle/maps/test_room.txt", "vectors/kill_officer.input.txt",
-         "vectors/kill_officer.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 1]),
-        // area_sound: guard at (12,3) in area 1; gunfire through the CLOSED door must not
-        // wake it, opening the door connects the areas and it then hears + wakes.
-        ("area_sound", "oracle/maps/area_room.txt", "vectors/area_sound.input.txt",
-         "vectors/area_sound.golden.jsonl", (4, 8, 1), vec![12, 3, 2, 0]),
-        // block_static: player walks into a barrel and is stopped; a guard's first chase
-        // step into a barrel forces a reroute — blocking-decoration collision (M6).
-        ("block_static", "oracle/maps/block_room.txt", "vectors/block_static.input.txt",
-         "vectors/block_static.golden.jsonl", (4, 8, 1), vec![12, 8, 2, 0]),
-    ];
-
-    for (name, mapf, inf, goldf, (sx, sy, sdir), guards) in scenarios {
-        let (w, h, tiles, doors, items, areas, blockers) = load_map(mapf)?;
-        let inputs = load_inputs(inf)?;
-        let golden = load_golden(goldf)?;
+    for sc in &discover_scenarios()? {
+        let (w, h, tiles, doors, items, areas, blockers) = load_map(&sc.map)?;
+        let inputs = load_inputs(&sc.input)?;
+        let golden = load_golden(&sc.golden)?;
+        let (sx, sy, sdir) = sc.spawn;
 
         let map = mp::Map::deploy(
             provider.clone(),
             U256::from(w), U256::from(h), Bytes::from(tiles),
-            U256::from(*sx), U256::from(*sy), U256::from(*sdir),
-            Bytes::from(guards.clone()),
+            U256::from(sx), U256::from(sy), U256::from(sdir),
+            Bytes::from(sc.guards.clone()),
             Bytes::from(doors),
             Bytes::from(items),
             Bytes::from(areas),
@@ -297,7 +322,12 @@ async fn main() -> Result<()> {
         ).await?;
         let session = sess::Session::deploy(provider.clone(), *engine.address(), *map.address(), Address::ZERO).await?;
 
-        decode_and_check(&session.getState().call().await?, &golden[0], 0)?;
+        // None = assert every tic; Some(list) = only those tics (default is every tic).
+        let want_check = |t: i64| sc.checkpoints.as_ref().map_or(true, |cps| cps.contains(&t));
+
+        if want_check(0) {
+            decode_and_check(&session.getState().call().await?, &golden[0], 0)?;
+        }
 
         let mut gas = Vec::new();
         for (idx, &(cx, cy, btns)) in inputs.iter().enumerate() {
@@ -308,14 +338,17 @@ async fn main() -> Result<()> {
             };
             let receipt = session.submitInput(cmd).send().await?.get_receipt().await?;
             gas.push(receipt.gas_used);
-            decode_and_check(&session.getState().call().await?, &golden[idx + 1], (idx + 1) as i64)?;
+            let tick = (idx + 1) as i64;
+            if want_check(tick) {
+                decode_and_check(&session.getState().call().await?, &golden[tick as usize], tick)?;
+            }
         }
 
         let n = gas.len() as u64;
         let (sum, min, max) = (gas.iter().sum::<u64>(), *gas.iter().min().unwrap(), *gas.iter().max().unwrap());
         println!(
             "{:<12} PASS ({} tics) — submitInput gas: min {} avg {} max {}",
-            name, golden.len(), min, sum / n, max
+            sc.name, golden.len(), min, sum / n, max
         );
     }
 

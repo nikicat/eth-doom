@@ -1,0 +1,7 @@
+{
+  "note": "player walks east into a blocking decoration (barrel at tile (8,8)) and is stopped (TryMove); a guard at (12,8) wakes on gunfire, chases west, and must route around the same barrel (TryWalk/CHECKSIDE) — exercises blocking-decoration collision (M6).",
+  "map": "block_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "guard", "x": 12, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

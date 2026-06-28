@@ -1,0 +1,7 @@
+{
+  "note": "a dog (1 HP, fast, melee) rushes the player and bites (T_DogChase/T_Bite).",
+  "map": "test_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "dog", "x": 12, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

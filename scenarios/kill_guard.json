@@ -1,0 +1,7 @@
+{
+  "note": "player at (4,8) faces east and fires (the noise wakes the guard); the guard at (12,8) approaches and dies.",
+  "map": "test_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "guard", "x": 12, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

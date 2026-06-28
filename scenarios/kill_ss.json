@@ -1,0 +1,7 @@
+{
+  "note": "an SS (100 HP, 4-shot burst) instead of a guard — player fires until it dies.",
+  "map": "test_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "ss", "x": 12, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

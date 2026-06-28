@@ -1,0 +1,7 @@
+{
+  "note": "player walks east over a clip / first-aid / key / treasure while a guard shoots — exercises GetBonus (ammo+keys+score, heal after damage, skip-if-full).",
+  "map": "item_room.txt",
+  "player": { "x": 2, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "guard", "x": 13, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

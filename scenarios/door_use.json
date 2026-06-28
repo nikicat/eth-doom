@@ -1,0 +1,7 @@
+{
+  "note": "player walks up to the vertical door at (8,8), opens it with Use, and slides through (no guard) — exercises Cmd_Use/OperateDoor/MoveDoors + door collision.",
+  "map": "door_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [],
+  "checkpoints": "all"
+}

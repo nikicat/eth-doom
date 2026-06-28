@@ -1,0 +1,7 @@
+{
+  "note": "movement only — turn/strafe/forward/back with tile collision.",
+  "map": "test_room.txt",
+  "player": { "x": 8, "y": 8, "dir": 1 },
+  "enemies": [],
+  "checkpoints": "all"
+}

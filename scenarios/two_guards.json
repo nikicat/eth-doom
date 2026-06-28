@@ -1,0 +1,10 @@
+{
+  "note": "two adjacent guards chase the player; the rear can't walk through the front (actorat occupancy — actor-vs-actor collision).",
+  "map": "test_room.txt",
+  "player": { "x": 2, "y": 8, "dir": 1 },
+  "enemies": [
+    { "class": "guard", "x": 10, "y": 8, "dir": 2 },
+    { "class": "guard", "x": 11, "y": 8, "dir": 2 }
+  ],
+  "checkpoints": "all"
+}

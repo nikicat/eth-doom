@@ -1,0 +1,7 @@
+{
+  "note": "guard at (12,3) in area 1, player in area 0, one door between. Firing with the door CLOSED must NOT wake the guard (areas disconnected); opening the door connects the areas and the guard then hears the gunfire and wakes (area connectivity).",
+  "map": "area_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "guard", "x": 12, "y": 3, "dir": 2 }],
+  "checkpoints": "all"
+}

@@ -4,28 +4,31 @@
 // vectors are what the Solidity Engine is diffed against, wasm == golden ⟹ wasm == chain.
 //
 //   node oracle/verify_wasm.mjs        (build first: bash oracle/build_wasm.sh)
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// scenario table — mirrors oracle/gen_vectors.sh (map, player spawn, enemy spawns).
-// enemy = [which, tilex, tiley, dir]; which: en_guard=0, en_officer=1, en_ss=2, en_dog=3.
-const SCENARIOS = [
-  { name: "move_basic",   map: "test_room.txt", sx: 8, sy: 8, sdir: 1, enemies: [] },
-  { name: "chase_guard",  map: "test_room.txt", sx: 8, sy: 8, sdir: 1, enemies: [[0, 12, 8, 2]] },
-  { name: "kill_guard",   map: "test_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[0, 12, 8, 2]] },
-  { name: "door_use",     map: "door_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [] },
-  { name: "door_guard",   map: "door_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[0, 12, 8, 2]] },
-  { name: "item_pickup",  map: "item_room.txt", sx: 2, sy: 8, sdir: 1, enemies: [[0, 13, 8, 2]] },
-  { name: "two_guards",   map: "test_room.txt", sx: 2, sy: 8, sdir: 1, enemies: [[0, 10, 8, 2], [0, 11, 8, 2]] },
-  { name: "kill_ss",      map: "test_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[2, 12, 8, 2]] },
-  { name: "dog_bite",     map: "test_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[3, 12, 8, 2]] },
-  { name: "kill_officer", map: "test_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[1, 12, 8, 2]] },
-  { name: "area_sound", map: "area_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[0, 12, 3, 2]] },
-  { name: "block_static", map: "block_room.txt", sx: 4, sy: 8, sdir: 1, enemies: [[0, 12, 8, 2]] },
-];
+// Scenarios are auto-discovered from scenarios/*.json — the single source of truth
+// shared with oracle/gen_vectors.sh + rust/harness (T1). enemy class -> en_* enum.
+const CLASS = { guard: 0, officer: 1, ss: 2, dog: 3 };
+const SCENARIOS = readdirSync(join(ROOT, "scenarios"))
+  .filter((f) => f.endsWith(".json"))
+  .sort()
+  .map((f) => {
+    const name = f.replace(/\.json$/, "");
+    const cfg = JSON.parse(readFileSync(join(ROOT, "scenarios", f), "utf8"));
+    return {
+      name,
+      map: cfg.map,
+      sx: cfg.player.x, sy: cfg.player.y, sdir: cfg.player.dir,
+      // [which, tilex, tiley, dir] — the order the wasm add_enemy / setup() expects.
+      enemies: (cfg.enemies ?? []).map((e) => [CLASS[e.class], e.x, e.y, e.dir]),
+      input: cfg.input ?? `${name}.input.txt`,
+      checkpoints: cfg.checkpoints ?? "all", // "all" = every tic; array = only those tics
+    };
+  });
 
 const DR_CLOSED = 1;
 
@@ -107,8 +110,8 @@ function setup(sc) {
   for (const [which, x, y, dir] of sc.enemies) E.add_enemy(which, x, y, dir);
 }
 
-function parseInputs(name) {
-  return readFileSync(join(ROOT, "vectors", `${name}.input.txt`), "utf8")
+function parseInputs(file) {
+  return readFileSync(join(ROOT, "vectors", file), "utf8")
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l && !l.startsWith("#"))
@@ -145,13 +148,14 @@ let failed = 0;
 for (const sc of SCENARIOS) {
   const golden = readFileSync(join(ROOT, "vectors", `${sc.name}.golden.jsonl`), "utf8")
     .split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  const inputs = parseInputs(sc.name);
+  const inputs = parseInputs(sc.input);
   const ndoors = golden[0].doors?.length ?? golden.find((g) => g.doors)?.doors.length ?? 0;
+  const shouldCheck = (t) => sc.checkpoints === "all" || sc.checkpoints.includes(t);
 
   setup(sc);
   let bad = null, badTick = -1;
   const check = (tick, want) => {
-    if (bad) return;
+    if (bad || !shouldCheck(tick)) return;
     const m = diff(decode(readState(), ndoors), want);
     if (m) { bad = m; badTick = tick; }
   };

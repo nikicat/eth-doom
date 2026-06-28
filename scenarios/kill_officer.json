@@ -1,0 +1,7 @@
+{
+  "note": "an officer (50 HP, speed x5, constant reaction) chases, fires, and dies.",
+  "map": "test_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "officer", "x": 12, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

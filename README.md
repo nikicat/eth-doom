@@ -27,7 +27,9 @@ contracts/   Foundry: Engine / Map / Session + Fixed/Trig/Rng libs (Solidity)
 rust/        cargo workspace: harness (differential + gas) · wl-extract (VSWAP→PNG textures/
              sprites) · map-extract · client-core (stubs)
 web/         TypeScript + Vite + viem top-down client
-vectors/     golden input + per-tick snapshot files (committed)
+scenarios/   one self-describing <name>.json per differential scenario (map · spawns ·
+             checkpoints) — auto-discovered by the oracle / harness / verify_wasm (single source)
+vectors/     per-scenario golden input (<name>.input.txt) + oracle snapshots (committed)
 ```
 
 ## Build

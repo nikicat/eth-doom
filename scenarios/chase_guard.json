@@ -1,0 +1,7 @@
+{
+  "note": "a dormant guard at (12,8) facing west sees the idle player at (8,8) via T_Stand/SightPlayer, then chases.",
+  "map": "test_room.txt",
+  "player": { "x": 8, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "guard", "x": 12, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}
