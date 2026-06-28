@@ -6,7 +6,7 @@ jobs:
   contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
       - uses: foundry-rs/foundry-toolchain@v1
@@ -18,7 +18,7 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: foundry-rs/foundry-toolchain@v1
       # harness's alloy::sol! macros embed contracts/out/*.json at compile time,
       # so the contracts must be built before `cargo test` will compile.
@@ -31,6 +31,6 @@ jobs:
   oracle:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: make
         working-directory: oracle
