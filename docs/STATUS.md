@@ -135,13 +135,36 @@ per-tick **golden vectors**; the Rust harness deploys the contracts on anvil, re
 inputs through `Session.submitInput`, and asserts the decoded state matches the golden vector
 **tic-by-tic** (player pose/health/ammo/keys/score, every guard field, every door's
 position/action/ticcount, every item's taken bit, obclass, and the RNG index — over single-guard,
-multi-guard, SS, dog, officer, and area-localization scenarios). All eleven scenarios pass.
+multi-guard, SS, dog, officer, area-localization, and blocking-collision scenarios). All twelve
+scenarios pass.
 
 The **wasm predictor is held to the same bar**: `oracle/verify_wasm.mjs` replays every golden
 scenario through `web/public/predict.wasm` and asserts its decoded packed state matches the golden
-vectors tic-by-tic (all eleven pass). So the same carved C is differential-verified compiled
+vectors tic-by-tic (all twelve pass). So the same carved C is differential-verified compiled
 two ways — natively (`sim_oracle`, the ground truth) and to wasm (the browser predictor) — and the
 client additionally reconciles each predicted tick against `Session.getState()` live.
+
+## Testing roadmap
+
+Today's bar — the **differential test** (above) + `forge test` (on-chain plumbing: delegation,
+ownership, access control) + live browser reconciliation — is strong for the *sim* but leans on
+hand-authored scenarios and eyeballed screenshots for the *renderer*. These layers extend it.
+**Inputs stay canonical** (the oracle regenerates the snapshots), so demos survive sim changes, and
+the small targeted scenarios stay for *diagnosis* — the layers below add coverage, authoring
+ergonomics, renderer regression, and oracle fidelity; they don't replace the focused differential.
+
+| | status | scope |
+|---|---|---|
+| **T1** self-describing demos + auto-discovery | ⬜ | one file per scenario = `{map, spawns, engine-commit, ticcmd stream, checkpoint ticks}`; the oracle / harness / `verify_wasm` auto-discover it. Today that scenario config is triplicated across `gen_vectors.sh` + `harness/main.rs` + `verify_wasm.mjs` (adding `block_static` meant editing all three); a demo file makes adding a test "drop a file". |
+| **T2** browser demo record → corpus | ⬜ | the client logs its per-tick `cmd()` stream (+ a periodic state hash) to a downloadable demo — playing the game authors tests; grow the corpus from real play. The on-chain `Session` history is itself a replayable demo corpus (immutable `engine` per session ⟹ a past game reproduces bit-for-bit). |
+| **T3** renderer pixel-match — WASM framebuffer (bit-exact, headless) | ⬜ | replay a demo → per-frame state → call `wolfrender` headless (Node, like `verify_wasm`) → hash the RGBA framebuffer → exact compare. Pure integer/double math, no browser/fonts. Covers the raycaster (projection, fisheye fix, depth occlusion, flat lighting, door slide). Procedural-art goldens are committed (asset-free, deterministic). |
+| **T4** renderer pixel-match — composited `#view` (tolerant, browser) | ⬜ | the 3D viewport only (walls + sprites + gun + scenery) — **rendered frame only; HUD / minimap / `fillText` / fonts out of scope**. Pinned headless Chromium, a **fixed render clock** (`renderView` is clock-parameterized → deterministic gun bob / muzzle / flash, and lets us skip death-overlay text frames), a **subset of stable checkpoint frames**, pixel-diff with a small per-channel tolerance + max-diff-% threshold. Procedural goldens committed; real-VSWAP goldens are local/gitignored (same licensing as the art). |
+| **T5** id `DEMO0`–`DEMO3` vs reference (oracle fidelity) | ⬜ | replay id's original recorded demos through the oracle and diff against a per-tick reference dump (e.g. Chocolate-Wolfenstein-3D) — the one check the current differential can't make: it validates the oracle's **carving against real id**, not just Engine-vs-oracle. Gated on M6+ completeness and the documented render-coupled deviations. |
+
+T3/T4 consume T1's demo format (a demo supplies the deterministic per-frame state the renderer
+draws); T5 is the fidelity capstone. Tier split for pixel-matching is deliberate: the WASM
+framebuffer (T3) is pure math → bit-exact and never flaky; the composited canvas (T4) adds
+`drawImage` and must stay tolerant + pinned + cropped to the rendered frame.
 
 ## Run it
 
