@@ -51,6 +51,24 @@ function loadTiles(mapFile) {
 
 const M = await makeRenderer();
 const TILEGLOBAL = 65536, U = 64; // 16.16 world coords -> sage units (1 tile = 64)
+const PWDX = [0, 1, 0, -1], PWDY = [-1, 0, 1, 0]; // di_north, di_east, di_south, di_west
+
+// Reconstruct the moving pushwall into wolfrender's tile buffer (mirrors Engine
+// _applyPushwall, tile-granular): the path resets to base, then crosses c=0..3 vacate
+// start..start+(c-1) and place the wall at start+c (+ start+c+1 while sliding). The
+// sub-tile slide (pwallpos) is not modeled here — the wall relocates tile-by-tile.
+function applyPushwall(pw, base, w, tp) {
+  if (!pw) return;
+  const set = (k, v) => {
+    const i = (pw.sy + PWDY[pw.dir] * k) * w + (pw.sx + PWDX[pw.dir] * k);
+    if (i >= 0 && i < base.length) M.HEAP32[tp + i] = v;
+  };
+  for (let k = 0; k <= 4; k++) set(k, base[(pw.sy + PWDY[pw.dir] * k) * w + (pw.sx + PWDX[pw.dir] * k)]); // reset path
+  const c = pw.state === 0 ? 3 : Math.floor(pw.state / 128);
+  for (let k = 0; k < c; k++) set(k, 0); // vacated -> floor
+  set(c, pw.tile); // leading wall
+  if (c < 3) set(c + 1, pw.tile);
+}
 
 // Render one golden snapshot's wall view and return the sha1 of (framebuffer + depth).
 function frameHash(snap, ndoors) {
@@ -83,9 +101,14 @@ for (const f of scenarios) {
 
   M._rinit(w, h, VW, VH, 0); // npages 0 -> procedural fallback (asset-free, deterministic)
   const tp = M._tiles_ptr() >> 2;
-  for (let i = 0; i < w * h; i++) M.HEAP32[tp + i] = tiles[i];
+  const base = Int32Array.from(tiles); // immutable base tilemap (pushwall overlays onto a copy)
+  for (let i = 0; i < w * h; i++) M.HEAP32[tp + i] = base[i];
 
-  const frames = golden.map((snap, t) => (shouldCheck(t) ? frameHash(snap, ndoors) : null));
+  const frames = golden.map((snap, t) => {
+    if (!shouldCheck(t)) return null;
+    applyPushwall(snap.pwall, base, w, tp); // reconstruct the moved wall into wolfrender's tiles
+    return frameHash(snap, ndoors);
+  });
 
   const goldFile = join(ROOT, "vectors", `${name}.render.json`);
   if (WRITE) {

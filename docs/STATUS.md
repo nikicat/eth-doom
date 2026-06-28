@@ -28,8 +28,10 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   `PushWall`/`MovePWalls`): the wall relocates over time, the tiles it vacates become walkable and join
   the player's area. The `Map` tilemap is immutable (SSTORE2), so the Engine **reconstructs the
   effective tilemap each tick** from a small packed pushwall record — differential-verified bit-for-bit
-  against the C oracle (which mutates its tilemap directly) across the whole slide and completion. Sim
-  only for now: one pushwall per session, and the sliding-wall visual is a deferred client feature.
+  against the C oracle (which mutates its tilemap directly) across the whole slide and completion. The
+  client + the T3 pixel-match reconstruct the moved wall into `wolfrender`'s tilemap, so the sliding
+  wall **renders** (tile-granular — it relocates tile-by-tile; the sub-tile slide is deferred). One
+  pushwall per session for now (multi-pushwall is a follow-up).
 - **Doors + area connectivity** — sliding doors (`SpawnDoor`/`OperateDoor`/`MoveDoors`/`DoorOpening`/
   `DoorClosing`): the player opens the one they face with **Use** (`Cmd_Use`), a chasing guard opens a
   door in its path (`TryWalk` → `OpenDoor`) and waits for it (`T_Chase`), doors auto-close after
@@ -100,7 +102,7 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 
 | | status | scope |
 |---|---|---|
-| **M6** weapons & world completeness | 🟡 | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); **pushwalls / secret walls** (slice 3) ✅ — `Cmd_Use` slides a pushable wall (`PushWall`/`MovePWalls`); the immutable-Map tilemap is **reconstructed each tick** from a packed pushwall record (the vacated tiles become walkable + join the player's area, the wall relocates), differential-verified across the full slide + completion (`push_secret`); sim-only, one pushwall per session, render + multi-pushwall deferred; next: **elevator + level exit + level→level flow** |
+| **M6** weapons & world completeness | 🟡 | **blocking-decoration collision** (slice 1) ✅; **weapon roster + switching** (slice 2) ✅ — knife/pistol/MG/chaingun: `weapon`/`bestweapon` packed, keys 1-4 select (`CheckWeaponChange`), `GiveWeapon` on MG/chaingun pickup, per-weapon fire (knife melee+silent+free, guns spend ammo, MG/chaingun faster, out-of-ammo→knife), differential-verified (`weapon_switch`); **pushwalls / secret walls** (slice 3) ✅ — `Cmd_Use` slides a pushable wall (`PushWall`/`MovePWalls`); the immutable-Map tilemap is **reconstructed each tick** from a packed pushwall record (the vacated tiles become walkable + join the player's area, the wall relocates), differential-verified across the full slide + completion (`push_secret`), and the sliding wall **renders** (client + T3 reconstruct the moved tilemap for `wolfrender`, tile-granular); one pushwall per session, multi-pushwall + sub-tile slide deferred; next: **elevator + level exit + level→level flow** |
 | **M7** audio | ⬜ | digitized SFX (VSWAP) + AdLib/IMF music, client-side, triggered from state deltas |
 | **M8** presentation shell | ⬜ | title / menu / "Get Psyched!" / level-intermission tally / episode flow |
 | **M9** MegaETH deployment | ⛔ | deploy to MegaETH testnet; fire-and-forget session-key play at ~native rate; end-to-end latency + gas (needs an RPC + funded key) |

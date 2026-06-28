@@ -42,6 +42,8 @@ let doorList: number[][] = []; // [tilex, tiley, vertical|lock<<1] in doornum or
 let itemList: number[][] = []; // [tilex, tiley, itemnumber] bonus items
 let sceneryList: number[][] = []; // [tilex, tiley, spriteIndex] decorative statics (render-only, off-chain)
 let blockerList: number[][] = []; // [tilex, tiley] blocking statics (on-chain movement collision, M6)
+let pushwallList: number[][] = []; // [tilex, tiley] pushable secret walls (Cmd_Use slides them, M6)
+let baseTiles = new Uint16Array(0); // the unmoved tilemap; the pushwall overlays onto a copy
 let areaMap: number[] = []; // per-tile area number (row-major); empty => single area
 let levelName = "test room";
 
@@ -56,7 +58,7 @@ function initTestRoom() {
   // and gold key (10,8). Fire (Space) makes noise that also wakes the guard.
   const MAP = [
     "################", "#......#.......#", "#......#.......#", "#......#.......#",
-    "#......#.......#", "#......#.......#", "#......#.......#", "#......#.......#",
+    "#......#.......#", "#......#.......#", "#......P.......#", "#......#.......#",
     "#....a.D.tk....#", "#......#.......#", "#......#.......#", "#......#.......#",
     "#......#.......#", "#......#.......#", "#......#.......#", "################",
   ];
@@ -66,11 +68,13 @@ function initTestRoom() {
   itemList = [];
   sceneryList = []; // the synthetic test room has no scenery
   blockerList = []; // …nor blocking statics
+  pushwallList = [];
   let doornum = 0;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const c = MAP[y][x];
       if (c === "#") tiles[y * W + x] = 1;
+      else if (c === "P") { tiles[y * W + x] = 1; pushwallList.push([x, y]); } // pushable secret wall
       else if (c === "D" || c === "d") {
         tiles[y * W + x] = 0x80 | doornum;
         doorList.push([x, y, c === "D" ? 1 : 0]); // vertical|lock<<1, lock 0
@@ -98,6 +102,7 @@ async function loadLevel(): Promise<boolean> {
     itemList = (L.items as number[][] | undefined) ?? [];
     sceneryList = (L.scenery as number[][] | undefined) ?? []; // decorative statics (render-only)
     blockerList = (L.blockers as number[][] | undefined) ?? []; // blocking statics (on-chain collision)
+    pushwallList = (L.pushwalls as number[][] | undefined) ?? []; // pushable secret walls (M6)
     areaMap = (L.areas as number[] | undefined) ?? []; // per-tile area numbers (sound localization)
     guardTiles = (L.guards as number[][])
       .map(([x, y, dir, cls]) => ({ x, y, dir: dir ?? 0, cls: cls ?? 0, d: Math.hypot(x - L.spawn.x, y - L.spawn.y) }))
@@ -147,6 +152,12 @@ function blockersHex(): Hex {
   blockerList.forEach(([x, y], i) => { b[i * 2] = x; b[i * 2 + 1] = y; });
   return bytesToHex(b);
 }
+// pushwalls blob: 2 bytes each (tilex, tiley) — pushable secret walls (Cmd_Use slides them, M6)
+function pushwallsHex(): Hex {
+  const b = new Uint8Array(pushwallList.length * 2);
+  pushwallList.forEach(([x, y], i) => { b[i * 2] = x; b[i * 2 + 1] = y; });
+  return bytesToHex(b);
+}
 // per-doornum open fraction (0 closed .. 1 open), refreshed each frame from state
 const doorOpenFrac = new Float64Array(64);
 
@@ -188,6 +199,7 @@ async function loadPredictor(): Promise<Predictor | null> {
     for (const [x, y, pk] of doorList) E.add_door(x, y, (pk ?? 0) & 1, (pk ?? 0) >> 1);
     for (const [x, y, n] of itemList) E.add_item(x, y, n);
     for (const [x, y] of blockerList) E.add_blocker(x, y); // before init_actors (seeds actorat)
+    for (const [x, y] of pushwallList) E.add_pushwall(x, y); // pushable secret walls (M6)
     E.init_actors();
     E.add_player(spawnTile.x, spawnTile.y, spawnTile.dir);
     for (const [x, y, dir, cls] of guardTiles) E.add_enemy(cls ?? 0, x, y, dir ?? 0);
@@ -205,7 +217,10 @@ async function loadPredictor(): Promise<Predictor | null> {
 // view + per-column depth into wasm memory each frame; we blit the framebuffer and
 // read the depth buffer to occlude sprites. Sprites / gun / HUD stay in TS on top.
 // Falls back to the TS raycaster if /wolfrender.mjs isn't built (or no id textures).
-type WallRenderer = { render: (px: number, py: number, pa: number, doors: Door[]) => void };
+type WallRenderer = {
+  render: (px: number, py: number, pa: number, doors: Door[]) => void;
+  syncTiles: (idxs: number[]) => void; // push changed tiles (pushwall) into the wasm buffer
+};
 
 async function loadWasmRenderer(): Promise<WallRenderer | null> {
   if (!assets) return null; // needs real VSWAP wall textures; procedural uses the TS path
@@ -243,6 +258,9 @@ async function loadWasmRenderer(): Promise<WallRenderer | null> {
         // blit the framebuffer (a view onto wasm memory — no growth after init)
         vctx.putImageData(new ImageData(new Uint8ClampedArray(M.HEAPU8.buffer, fbBase, fbLen), VW, VH), 0, 0);
         for (let c = 0; c < VW; c++) zbuf[c] = M.HEAPF32[zbBase + c]; // depth for sprites
+      },
+      syncTiles(idxs) {
+        for (const i of idxs) M.HEAP32[tp + i] = tiles[i] & 0xff; // re-upload a moved pushwall tile
       },
     };
   } catch (e) {
@@ -282,6 +300,7 @@ type State = {
   doors: Door[];
   itemsTaken: boolean[];
   guards: Guard[];
+  pushwall: { sx: number; sy: number; dir: number; state: number; tile: number } | null;
 };
 
 function decode(hex: string): State {
@@ -334,6 +353,13 @@ function decode(hex: string): State {
     doors,
     itemsTaken,
     guards,
+    // pushwall: one trailing word after the actors when haspushwall@40 is set (M6)
+    pushwall: fld(header, 40, 1)
+      ? (() => {
+          const q = w[2 + ad + iw + n];
+          return { sx: fld(q, 0, 8), sy: fld(q, 8, 8), dir: fld(q, 16, 8), state: fld(q, 24, 16), tile: fld(q, 40, 8) };
+        })()
+      : null,
   };
 }
 
@@ -847,8 +873,32 @@ function drawScenery(px: number, py: number, pa: number, A: Assets) {
   }
 }
 
+const PWDX = [0, 1, 0, -1], PWDY = [-1, 0, 1, 0]; // di_north, di_east, di_south, di_west
+// Reconstruct the moving pushwall into the live tilemap (mirrors Engine _applyPushwall,
+// tile-granular): reset the path to base, then crosses c=0..3 vacate start..start+(c-1)
+// and place the wall at start+c (+ start+c+1 while sliding). The TS raycaster + minimap
+// read `tiles` live; the wasm renderer's buffer is re-synced via the returned indices.
+// The sub-tile slide (pwallpos) isn't modeled — the wall relocates tile-by-tile.
+function applyPushwallOverlay(s: State): number[] {
+  const pw = s.pushwall;
+  if (!pw) return [];
+  const changed: number[] = [];
+  const idx = (k: number) => (pw.sy + PWDY[pw.dir] * k) * W + (pw.sx + PWDX[pw.dir] * k);
+  const set = (k: number, v: number) => { const i = idx(k); if (i >= 0 && i < tiles.length) { tiles[i] = v; changed.push(i); } };
+  for (let k = 0; k <= 4; k++) set(k, baseTiles[idx(k)]); // reset the path to base
+  const c = pw.state === 0 ? 3 : Math.floor(pw.state / 128);
+  for (let k = 0; k < c; k++) set(k, 0); // vacated -> floor
+  set(c, pw.tile); // leading wall
+  if (c < 3) set(c + 1, pw.tile);
+  return changed;
+}
+
 function renderView(s: State, clock: number, fx: Fx) {
   const px = toU(s.player.x), py = toU(s.player.y), pa = s.player.angle;
+
+  // pushwall: reconstruct the moved wall into the live tilemap (M6) before any wall cast
+  const pwChanged = applyPushwallOverlay(s);
+  if (wall && pwChanged.length) wall.syncTiles(pwChanged);
 
   // refresh per-door open fractions (action 0 = DR_OPEN = fully open) for the raycaster
   for (let i = 0; i < s.doors.length; i++)
@@ -1251,6 +1301,7 @@ async function main() {
   vctx.imageSmoothingEnabled = false; // crisp texels
   dbg.textContent = "loading level + assets / deploying to anvil…";
   await loadLevel(); // real Wolf3D level from /level.json if present, else the test room
+  baseTiles = Uint16Array.from(tiles); // snapshot the unmoved tilemap for pushwall overlays
   assets = await loadAssets(); // authentic id art if /wolf/*.png present, else procedural
   wall = await loadWasmRenderer(); // wasm wall raycaster if built, else the TS one
   renderLabel = wall ? "wasm (Emscripten raycaster)" : "ts raycaster";
@@ -1259,7 +1310,7 @@ async function main() {
   const map = await deploy(MapA, [
     BigInt(W), BigInt(H), tilesHex(),
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
-    guardsHex(), doorsHex(), itemsHex(), areasHex(), blockersHex(),
+    guardsHex(), doorsHex(), itemsHex(), areasHex(), blockersHex(), pushwallsHex(),
   ]);
   // owner = our dev account (the "main wallet"). It signs exactly once below to
   // delegate a session key; from then on the burner signs every tick.

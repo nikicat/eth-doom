@@ -79,6 +79,7 @@ EXPORT void add_door(int x, int y, int vertical, int lock) { SpawnDoor(x, y, ver
 EXPORT void add_item(int x, int y, int itemnumber) { SpawnStatic(x, y, itemnumber); }
 /* blocking decoration (M6): set BEFORE init_actors (InitActors seeds actorat from blockmap). */
 EXPORT void add_blocker(int x, int y) { blockmap[x][y] = 1; }
+EXPORT void add_pushwall(int x, int y) { tilemap[x][y] = 1; pushwallat[x][y] = 1; } /* pushable secret wall */
 
 /* Sugar for the headless verifier: mirror oracle.c load_map()'s char semantics so
  * the verifier can replay the text maps without duplicating the bo_/door mapping. */

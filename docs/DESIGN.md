@@ -145,9 +145,10 @@ are deviations from id's *render-coupled* code, not between our two implementati
   though the tilemap *representation* differs (the oracle's grid vs the Engine's reconstruction). id's
   `0xc0` "moving" tile-flag is dropped — a relocated wall is a plain solid tile (the sim cares only
   solid-vs-floor; the sub-tile slide is a render value). With the fixed `tics=1` a wall slides 3 tiles
-  (id's "two" assumes `tics>1`). Slice-3 simplifications: one pushwall per session (single record, not
-  a sparse list), no mid-slide actor block-check (the trigger still checks the first destination), and
-  the client sliding-wall visual is deferred.
+  (id's "two" assumes `tics>1`). The client and the T3 pixel-match reconstruct the moved wall into
+  `wolfrender`'s tilemap the same way (tile-granular), so the slide renders. Remaining simplifications:
+  one pushwall per session (single record, not a sparse list), no mid-slide actor block-check (the
+  trigger still checks the first destination), and the sub-tile slide (`pwallpos`) isn't drawn.
 - **Enemy classes share one state table + AI.** The full E1 roster lives in one flat `gstates[]` graph
   (0–15 guard, 16–37 SS, 38–53 dog, 54–70 officer). Guard/SS/officer reuse `T_Chase`/`T_Shoot`; the dog
   has its own `T_DogChase` (no LOS — rushes via `SelectDodgeDir` and leaps to `T_Bite` at melee range)
