@@ -8,9 +8,11 @@ lockstep netcode). Rendering and audio stay off-chain.
 when they see or hear you, chases, shoots/bites you, and you can shoot them dead, and they no longer
 walk through each other; doors slide open
 when you Use them (or a guard bumps one) and block sight until they do; you pick up ammo / health /
-keys / treasure by walking over them (keys unlock their doors) — a PvE loop simulated entirely in a
-Solidity contract, **verified bit-for-bit against the original id C code**, at ~65–125k gas per input,
-with a live **first-person** browser view (raycaster + HUD + minimap), all decoded from on-chain state.
+keys / treasure by walking over them (keys unlock their doors); and Using the **elevator switch ends
+the level** (the sim freezes; the client plays Wolf3D's level-complete intermission) — a PvE loop
+simulated entirely in a Solidity contract, **verified bit-for-bit against the original id C code**, at
+~75–135k gas per input, with a live **first-person** browser view (raycaster + HUD + minimap), all
+decoded from on-chain state.
 
 - **[docs/STATUS.md](docs/STATUS.md)** — milestones, what runs, gas numbers, how to run it.
 - **[docs/DESIGN.md](docs/DESIGN.md)** — architecture, the differential-testing method, state

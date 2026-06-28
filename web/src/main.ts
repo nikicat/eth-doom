@@ -54,12 +54,14 @@ const ITEM_CHARS: Record<string, number> = { a: 14, h: 5, k: 6, t: 10 };
 
 function initTestRoom() {
   // a room split by a N–S wall with a door (7,8); spawn faces it, a guard waits
-  // behind. Walk over the ammo (5,8), open the door (E), grab the treasure (9,8)
-  // and gold key (10,8). Fire (Space) makes noise that also wakes the guard.
+  // behind. Walk over the ammo (5,8), open the door (Use), grab the treasure (9,8)
+  // and gold key (10,8). Fire (Space) makes noise that also wakes the guard. The west
+  // wall by spawn has the elevator switch (E at 0,8): turn around and Use it to END the
+  // level (the level-complete intermission) — reachable without fighting through.
   const MAP = [
     "################", "#......#.......#", "#......#.......#", "#......#.......#",
     "#......#.......#", "#......#.......#", "#......P.......#", "#......#.......#",
-    "#....a.D.tk....#", "#......#.......#", "#......#.......#", "#......#.......#",
+    "E....a.D.tk....#", "#......#.......#", "#......#.......#", "#......#.......#",
     "#......#.......#", "#......#.......#", "#......#.......#", "################",
   ];
   W = 16; H = 16;
@@ -74,6 +76,7 @@ function initTestRoom() {
     for (let x = 0; x < W; x++) {
       const c = MAP[y][x];
       if (c === "#") tiles[y * W + x] = 1;
+      else if (c === "E") tiles[y * W + x] = 21; // elevator (level-exit) switch wall (ELEVATORTILE)
       else if (c === "P") { tiles[y * W + x] = 1; pushwallList.push([x, y]); } // pushable secret wall
       else if (c === "D" || c === "d") {
         tiles[y * W + x] = 0x80 | doornum;
@@ -194,7 +197,8 @@ async function loadPredictor(): Promise<Predictor | null> {
     }
     for (let i = 0; i < W * H; i++) {
       const v = tiles[i] & 0xff;
-      if (v && !(v & 0x80)) E.set_wall(i % W, (i / W) | 0); // wall (door tiles via add_door)
+      if (v === 21) E.set_elevator(i % W, (i / W) | 0); // elevator switch (ELEVATORTILE) — not a plain wall
+      else if (v && !(v & 0x80)) E.set_wall(i % W, (i / W) | 0); // wall (door tiles via add_door)
     }
     for (const [x, y, pk] of doorList) E.add_door(x, y, (pk ?? 0) & 1, (pk ?? 0) >> 1);
     for (const [x, y, n] of itemList) E.add_item(x, y, n);
@@ -301,6 +305,7 @@ type State = {
   itemsTaken: boolean[];
   guards: Guard[];
   pushwall: { sx: number; sy: number; dir: number; state: number; tile: number } | null;
+  exit: number; // exit_t @48: 0 still playing, 1 completed (elevator used → level over)
 };
 
 function decode(hex: string): State {
@@ -360,6 +365,7 @@ function decode(hex: string): State {
           return { sx: fld(q, 0, 8), sy: fld(q, 8, 8), dir: fld(q, 16, 8), state: fld(q, 24, 16), tile: fld(q, 40, 8) };
         })()
       : null,
+    exit: fld(header, 48, 8), // level-end latch (elevator)
   };
 }
 
@@ -894,6 +900,9 @@ function applyPushwallOverlay(s: State): number[] {
 }
 
 function renderView(s: State, clock: number, fx: Fx) {
+  // level complete (elevator used): the intermission sequence owns the view canvas.
+  if (s.exit !== 0) { renderLevelEnd(s, clock); return; }
+  if (levelEndAt !== 0) levelEndAt = 0; // reset on a new game
   const px = toU(s.player.x), py = toU(s.player.y), pa = s.player.angle;
 
   // pushwall: reconstruct the moved wall into the live tilemap (M6) before any wall cast
@@ -958,6 +967,66 @@ function renderView(s: State, clock: number, fx: Fx) {
   }
 
   drawBorder(); // M5: frame the viewport (over everything, incl. the death fade)
+}
+
+// Wolf3D level-complete sequence (render-only; the sim just latches exit=1 when the
+// elevator switch is Used, then freezes). The elevator doors slide shut over the frozen
+// view, then the iconic between-levels intermission: "LEVEL COMPLETED", BJ, and the score
+// counting up. A demo has no floor 2 — the run ends on this screen. Drawn on the view
+// canvas (the HUD/minimap below it freeze on the final stats), framed by drawBorder.
+function renderLevelEnd(s: State, clock: number) {
+  if (levelEndAt === 0) { levelEndAt = clock; levelEndScore = s.player.score; }
+  const t = clock - levelEndAt;
+  const gold = "#fcd820", blue = "#0000a8";
+  vctx.textAlign = "center";
+
+  // Phase A (0–650ms): two elevator doors slide in from the sides over the frozen scene.
+  const shut = Math.min(1, t / 650);
+  if (shut < 1) {
+    const half = Math.ceil((VW / 2) * shut);
+    vctx.fillStyle = "#808080"; // elevator-door gray
+    vctx.fillRect(0, 0, half, VH);
+    vctx.fillRect(VW - half, 0, half, VH);
+    vctx.fillStyle = "rgba(0,0,0,0.4)"; // seam shadow at the closing gap
+    vctx.fillRect(half - 2, 0, 2, VH);
+    vctx.fillRect(VW - half, 0, 2, VH);
+    drawBorder();
+    return;
+  }
+
+  // Phase B (650ms+): the blue intermission panel.
+  const tb = t - 650;
+  vctx.fillStyle = blue;
+  vctx.fillRect(0, 0, VW, VH);
+
+  // title fades + drops in over ~450ms
+  const drop = Math.min(1, tb / 450);
+  vctx.globalAlpha = drop;
+  vctx.fillStyle = gold;
+  vctx.font = `bold ${Math.round(VW * 0.085)}px ui-monospace, monospace`;
+  vctx.fillText("LEVEL COMPLETED", VW / 2, VH * (0.26 - 0.06 * (1 - drop)));
+  vctx.globalAlpha = 1;
+
+  // BJ (happy, looking forward) pops in after the title, pixel-scaled
+  const face = assets?.pics.get(PIC_FACE1A + 1);
+  if (face && tb > 250) {
+    const pop = Math.min(1, (tb - 250) / 300);
+    const fw = Math.round(VW * 0.16 * pop), fh = Math.round(fw * 32 / 24);
+    vctx.imageSmoothingEnabled = false;
+    vctx.drawImage(face, 0, 0, 24, 32, (VW - fw) / 2, VH * 0.40, fw, fh);
+  }
+
+  // SCORE label + count-up to the final score (starts at 700ms, runs ~1200ms)
+  if (tb > 700) {
+    const cu = Math.min(1, (tb - 700) / 1200);
+    const shown = Math.floor(levelEndScore * cu);
+    vctx.fillStyle = "#ffffff";
+    vctx.font = `bold ${Math.round(VW * 0.05)}px ui-monospace, monospace`;
+    vctx.fillText(`SCORE  ${shown}`, VW / 2, VH * 0.84);
+  }
+
+  vctx.textAlign = "left";
+  drawBorder();
 }
 
 // the original TS wall raycaster (ceiling/floor fill + one ray per column), used when
@@ -1218,6 +1287,8 @@ let renderLabel = "ts raycaster"; // wall renderer: wasm vs TS raycaster
 let tps = 0; // confirmed ticks/sec (rolling 1s window)
 const TICK_HZ = 70; // fixed-timestep target — Wolf3D's native time base; we sustain more
 let deathAt = 0; // clock (ms) when the player's health first hit 0, for the death sequence
+let levelEndAt = 0; // clock (ms) when exit first latched, for the level-complete sequence
+let levelEndScore = 0; // player score captured at level end (count-up target)
 const shortAddr = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 function renderDbg(s: State, tick: number, gas: number | null) {
@@ -1460,6 +1531,10 @@ async function main() {
   let nextAt = performance.now();
 
   for (;;) {
+    // level over (elevator): the sim is frozen on-chain and in the predictor, so stop
+    // submitting no-op ticks — the render loop plays the level-complete intermission.
+    if (latest?.exit) { console.log(`[level] completed @ tick ${tick} — sim frozen, halting input`); break; }
+
     const wait = nextAt - performance.now();
     if (wait > 0) await sleep(wait);
     nextAt += DT;

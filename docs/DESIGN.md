@@ -49,7 +49,8 @@ Session  per-game packed world state                    raycaster view       gol
 `Engine.sol`, the harness, and the web decoder:
 
 - **header**: `rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24 |
-  haspushwall:bit@40`
+  haspushwall:bit@40 | exit:uint8@48` (exit_t — 0 still playing, 1 completed; once nonzero the
+  Engine freezes, re-packing the world unchanged so further inputs are no-ops)
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
   tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176 |
   keys:uint8@184 | score:uint32@192 | weapon:uint8@224 | bestweapon:uint8@232`
@@ -149,6 +150,18 @@ are deviations from id's *render-coupled* code, not between our two implementati
   `wolfrender`'s tilemap the same way (tile-granular), so the slide renders. Remaining simplifications:
   one pushwall per session (single record, not a sparse list), no mid-slide actor block-check (the
   trigger still checks the first destination), and the sub-tile slide (`pwallpos`) isn't drawn.
+- **The elevator ends the level; the sim then freezes.** id's `Cmd_Use` ends the level when the player
+  Uses an `ELEVATORTILE` (21) on an east/west wall (`elevatorok`): it sets `playstate = ex_completed`
+  and `PlayLoop` returns. Headless there's no loop to return from, so the same trigger latches an `exit`
+  byte (header `@48`) and **freezes the sim** — the oracle main loop, the wasm `step()`, and the Engine
+  `tick()` all short-circuit once `exit` is set, re-emitting the unchanged world so any further input is a
+  no-op (the Session is terminal). Applied identically on all three, so the differential still holds
+  (scenario `level_exit`). id's switch-texture flip (`tilemap[checkx][checky]++`, 21→22) stays oracle-only
+  — the Engine's tilemap is immutable and the freeze already prevents re-trigger. `map-extract` keeps real
+  wall tile values, so E1L1's actual exit elevator works unchanged. **No level→level flow**: this is a
+  demo (one immutable Map per Session by design), so on completion the *client* plays Wolf3D's
+  level-complete intermission (render-only) rather than loading a floor 2; `ex_secretlevel` (the
+  `ALTELEVATORTILE` variant) is likewise out of scope.
 - **Enemy classes share one state table + AI.** The full E1 roster lives in one flat `gstates[]` graph
   (0–15 guard, 16–37 SS, 38–53 dog, 54–70 officer). Guard/SS/officer reuse `T_Chase`/`T_Shoot`; the dog
   has its own `T_DogChase` (no LOS — rushes via `SelectDodgeDir` and leaps to `T_Bite` at melee range)
