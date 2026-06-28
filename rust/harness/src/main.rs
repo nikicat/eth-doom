@@ -52,6 +52,7 @@ struct Snap {
     score: i64,
     weapon: i64,
     bestweapon: i64,
+    exit: i64,               // exit_t: 0 still playing, 1 completed (elevator used)
     pwall: Option<[i64; 5]>, // sx, sy, dir, state, tile (None = no pushwall triggered)
 }
 
@@ -91,6 +92,7 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
             score: v.get("score").and_then(|x| x.as_i64()).unwrap_or(0),
             weapon: v.get("weapon").and_then(|x| x.as_i64()).unwrap_or(1),
             bestweapon: v.get("bestweapon").and_then(|x| x.as_i64()).unwrap_or(1),
+            exit: v.get("exit").and_then(|x| x.as_i64()).unwrap_or(0),
             pwall: v.get("pwall").map(|p| {
                 let f = |k: &str| p[k].as_i64().unwrap();
                 [f("sx"), f("sy"), f("dir"), f("state"), f("tile")]
@@ -140,6 +142,7 @@ fn load_map(path: &str) -> Result<(u64, u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>,
                 b'm' => items.extend_from_slice(&item(16)), // bo_machinegun
                 b'g' => items.extend_from_slice(&item(17)), // bo_chaingun
                 b'P' => { tiles[(y * w + x) as usize] = 1; pushwalls.extend_from_slice(&[x as u8, y as u8]); } // pushable secret wall
+                b'E' => tiles[(y * w + x) as usize] = 21, // elevator (level-exit) switch wall (ELEVATORTILE)
                 b'B' => blockers.extend_from_slice(&[x as u8, y as u8]), // blocking decoration
                 b'0'..=b'9' => areas[(y * w + x) as usize] = c - b'0', // floor, explicit area
                 _ => {}
@@ -208,6 +211,10 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
         if rnd != wr {
             bail!("tic {tick} RNG mismatch: got {} want {}", rnd, wr);
         }
+    }
+    let exit = field(header, 48, 8) as i64; // exit_t latch (level over once nonzero)
+    if exit != want.exit {
+        bail!("tic {tick} EXIT mismatch: got {} want {}", exit, want.exit);
     }
     // doors: only the `ad` non-closed doors are stored (each carries its doornum).
     // Reconstruct the full set: default every door closed [pos 0, act 1, tc 0], apply

@@ -1,0 +1,44 @@
+# level_exit: spawn (10,8) dir 1 (east). controlx controly buttons.
+# forward (controly -90) + Use held (buttons 8): walk into the elevator switch on the
+# east wall and trigger it. Once it ends the level (~tile 14, facing east), the sim
+# freezes: every remaining tic re-emits the unchanged snapshot (exit stays 1).
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8
+0 -90 8

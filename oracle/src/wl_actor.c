@@ -16,6 +16,7 @@ int      plux, pluy;
 long     thrustspeed;
 int      health = 100;   /* gamestate.health */
 int      playerdead;     /* playstate == ex_died */
+int      playstate;      /* exit_t: ex_stillplaying until the elevator switch is used */
 int      ammo = STARTAMMO;
 int      weapon = wp_pistol, bestweapon = wp_pistol; /* NewGame: start with the pistol */
 int      attackcount;    /* fire cooldown */
@@ -577,18 +578,20 @@ void MovePWalls(void) {
 /* WL_AGENT.C Cmd_Use — operate the door the player faces (edge-triggered via
  * useheld). Elevator + pushwall paths dropped (no exit/secret in this scope). */
 void Cmd_Use(int buttons) {
-    int checkx, checky, dir, doortile;
+    int checkx, checky, dir, doortile, elevatorok;
 
     if (!((buttons >> bt_use) & 1)) { useheld = 0; return; }
 
+    /* elevatorok: only an east/west wall is a usable elevator switch (the switch faces
+     * the player along the corridor); north/south facings can't trigger it. */
     if (player->angle < ANGLES / 8 || player->angle > 7 * ANGLES / 8) {
-        checkx = player->tilex + 1; checky = player->tiley;     dir = di_east;
+        checkx = player->tilex + 1; checky = player->tiley;     dir = di_east;  elevatorok = 1;
     } else if (player->angle < 3 * ANGLES / 8) {
-        checkx = player->tilex;     checky = player->tiley - 1; dir = di_north;
+        checkx = player->tilex;     checky = player->tiley - 1; dir = di_north; elevatorok = 0;
     } else if (player->angle < 5 * ANGLES / 8) {
-        checkx = player->tilex - 1; checky = player->tiley;     dir = di_west;
+        checkx = player->tilex - 1; checky = player->tiley;     dir = di_west;  elevatorok = 1;
     } else {
-        checkx = player->tilex;     checky = player->tiley + 1; dir = di_south;
+        checkx = player->tilex;     checky = player->tiley + 1; dir = di_south; elevatorok = 0;
     }
     /* pushwall: triggers regardless of the useheld latch (PushWall guards re-entry via
      * pwallstate + the cleared marker), exactly like id checking PUSHABLETILE first. */
@@ -598,6 +601,15 @@ void Cmd_Use(int buttons) {
     }
     if (useheld) return;
     doortile = tilemap[checkx][checky];
+    /* elevator switch: end the level (WL_AGENT.C Cmd_Use). id flips the tile to the
+     * activated switch texture (21->22) and sets playstate = ex_completed; we latch the
+     * exit and freeze the sim (the main loop / Engine stop advancing once it's set). */
+    if (doortile == ELEVATORTILE && elevatorok) {
+        useheld = 1;
+        tilemap[checkx][checky]++;   /* flip to the activated switch (render-only) */
+        playstate = ex_completed;
+        return;
+    }
     if (doortile & 0x80) {
         useheld = 1;
         OperateDoor(doortile & ~0x80);

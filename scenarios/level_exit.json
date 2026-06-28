@@ -1,0 +1,7 @@
+{
+  "note": "player walks east holding Use into the elevator switch (E = ELEVATORTILE at the east wall, tile (15,8)); facing east (elevatorok) Cmd_Use ends the level — playstate latches ex_completed and the sim FREEZES, so every later input tic re-emits the unchanged snapshot. Exercises the elevator path in Cmd_Use, the exit byte in the header (@48), and freeze-on-complete (oracle main loop, Engine tick(), and the wasm step() all short-circuit). One pushwall-style single record; no level 2 (this is a demo — the client plays a level-end animation).",
+  "map": "exit_room.txt",
+  "player": { "x": 10, "y": 8, "dir": 1 },
+  "enemies": [],
+  "checkpoints": "all"
+}

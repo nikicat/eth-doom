@@ -45,6 +45,8 @@ static void emit(long tick)
         printf("]");
     }
     printf(",\"keys\":%d,\"score\":%ld", keys, score);
+    if (playstate)   /* only when the level has ended (keeps unchanged goldens byte-identical) */
+        printf(",\"exit\":%d", playstate);
     if (pwall_active)
         printf(",\"pwall\":{\"sx\":%d,\"sy\":%d,\"dir\":%d,\"state\":%d,\"tile\":%d}",
                pwall_startx, pwall_starty, pwalldir, pwallstate, pwall_oldtile);
@@ -80,6 +82,7 @@ static void load_map(const char *path)
             else if (c == 'm') SpawnStatic(x, y, bo_machinegun); /* machine gun pickup */
             else if (c == 'g') SpawnStatic(x, y, bo_chaingun);   /* chaingun pickup */
             else if (c == 'P') { tilemap[x][y] = 1; pushwallat[x][y] = 1; } /* pushable secret wall */
+            else if (c == 'E') tilemap[x][y] = ELEVATORTILE;   /* elevator (level-exit) switch wall */
             else if (c == 'B') blockmap[x][y] = 1;             /* blocking decoration (barrel/table/…) */
             else if (c >= '0' && c <= '9') areamap[x][y] = c - '0'; /* floor, explicit area */
             /* else: floor, area 0 ('.', ' ') */
@@ -135,6 +138,11 @@ int main(int argc, char **argv)
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '#' || *p == '\n' || *p == '\0') continue;
         if (sscanf(p, "%d %d %d", &cx, &cy, &btns) != 3) continue;
+
+        /* level over (elevator used): the sim is frozen — id's PlayLoop has returned.
+         * Re-emit the unchanged snapshot for each remaining input tic so the golden
+         * vector still has one line per input (and the Engine does the same freeze). */
+        if (playstate != ex_stillplaying) { emit(++tick); continue; }
 
         controlx = cx;
         controly = cy;

@@ -64,6 +64,7 @@ EXPORT void reset(void) {
     bestweapon = wp_pistol;
     attackcount = 0;
     playerdead = 0;
+    playstate = ex_stillplaying;   /* clear the level-end latch (persistent wasm instance) */
     pwallstate = pwall_active = pwallpos = 0;
     memset(tilemap, 0, sizeof tilemap);
     memset(areamap, 0, sizeof areamap);
@@ -80,6 +81,7 @@ EXPORT void add_item(int x, int y, int itemnumber) { SpawnStatic(x, y, itemnumbe
 /* blocking decoration (M6): set BEFORE init_actors (InitActors seeds actorat from blockmap). */
 EXPORT void add_blocker(int x, int y) { blockmap[x][y] = 1; }
 EXPORT void add_pushwall(int x, int y) { tilemap[x][y] = 1; pushwallat[x][y] = 1; } /* pushable secret wall */
+EXPORT void set_elevator(int x, int y) { tilemap[x][y] = ELEVATORTILE; } /* elevator (level-exit) switch */
 
 /* Sugar for the headless verifier: mirror oracle.c load_map()'s char semantics so
  * the verifier can replay the text maps without duplicating the bo_/door mapping. */
@@ -95,6 +97,7 @@ EXPORT void setup_tile(int x, int y, int ch) {
         case 'm': SpawnStatic(x, y, bo_machinegun); break;
         case 'g': SpawnStatic(x, y, bo_chaingun); break;
         case 'P': tilemap[x][y] = 1; pushwallat[x][y] = 1; break; /* pushable secret wall */
+        case 'E': tilemap[x][y] = ELEVATORTILE; break; /* elevator (level-exit) switch wall */
         case 'B': blockmap[x][y] = 1; break; /* blocking decoration */
         default: if (ch >= '0' && ch <= '9') areamap[x][y] = ch - '0'; break; /* floor / area digit */
     }
@@ -109,6 +112,7 @@ EXPORT void add_enemy(int which, int x, int y, int dir) { SpawnEnemy(which, x, y
 
 /* --- one tick: the exact WL_PLAY.C PlayLoop order from oracle.c --- */
 EXPORT void step(int cx, int cy, int btns) {
+    if (playstate != ex_stillplaying) return; /* level over: frozen (matches the Engine) */
     controlx = cx;
     controly = cy;
     for (int b = 0; b < NUMBUTTONS; b++) buttonstate[b] = (btns >> b) & 1;
@@ -145,12 +149,13 @@ EXPORT int read_state(void) {
     unsigned char *out = g_state;
     memset(out, 0, 32 * nwords);
 
-    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 | haspushwall@40 */
+    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 | haspushwall@40 | exit@48 */
     put(out, 0, 8, rndindex & 0xff);
     put(out, 8, 8, na & 0xff);
     put(out, 16, 8, ad & 0xff);
     put(out, 24, 16, ni & 0xffff);
     put(out, 40, 1, hp);
+    put(out, 48, 8, playstate & 0xff);
 
     /* player word */
     unsigned char *pw = out + 32;

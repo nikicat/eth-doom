@@ -60,7 +60,7 @@ function decode(bytes, ndoorsTotal) {
     x: s(p, 0, 32), y: s(p, 32, 32), angle: s(p, 64, 16), anglefrac: s(p, 80, 32),
     tilex: u(p, 112, 8), tiley: u(p, 120, 8), health: s(p, 128, 16), ammo: s(p, 144, 16),
     acount: s(p, 160, 16), keys: u(p, 184, 8), score: s(p, 192, 32),
-    weapon: u(p, 224, 8), bestweapon: u(p, 232, 8),
+    weapon: u(p, 224, 8), bestweapon: u(p, 232, 8), exit: u(h, 48, 8),
   };
   // doors: default all closed, fill from the sparse active-door words (by doornum)
   const doors = Array.from({ length: ndoorsTotal }, () => ({ pos: 0, act: DR_CLOSED, tc: 0 }));
@@ -135,6 +135,7 @@ function diff(got, want) {
     eq("ammo", got.ammo, want.ammo), eq("acount", got.acount, want.acount),
     eq("keys", got.keys, want.keys), eq("score", got.score, want.score),
     eq("weapon", got.weapon, want.weapon), eq("bestweapon", got.bestweapon, want.bestweapon),
+    eq("exit", got.exit, want.exit ?? 0), // golden omits exit when 0 (still playing)
   ];
   if (want.rng !== undefined) {
     checks.push(eq("rng", got.rng, want.rng));

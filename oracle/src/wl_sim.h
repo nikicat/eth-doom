@@ -31,6 +31,11 @@ typedef int32_t fixed; /* 16.16 fixed point (id's `typedef long fixed`) */
 #define OPENTICS      300             /* DoorOpen auto-close delay */
 #define AREATILE      107             /* first floor/area tile (map semantics) */
 #define NUMAREAS      37              /* WL_DEF.H: floor tiles AREATILE..AREATILE+36 */
+#define ELEVATORTILE  21             /* WL_DEF.H: the elevator (level-exit) switch wall */
+
+/* WL_DEF.H exit_t (subset). Cmd_Use on an elevator switch sets playstate = ex_completed,
+ * which in id ends PlayLoop; headless we latch it and freeze the sim (the level is over). */
+enum { ex_stillplaying, ex_completed };
 enum { dr_open, dr_closed, dr_opening, dr_closing };   /* doorobj_t.action */
 enum { dr_normal, dr_lock1, dr_lock2, dr_lock3, dr_lock4, dr_elevator }; /* lock */
 
@@ -172,6 +177,7 @@ extern int   anglefrac;                 /* persistent sub-degree turn accumulato
 extern long  playerxmove, playerymove;
 extern long  thrustspeed;               /* total player thrust this tic (T_Shoot) */
 extern int   health, playerdead;        /* gamestate.health; ex_died flag */
+extern int   playstate;                  /* exit_t: ex_stillplaying / ex_completed (elevator) */
 extern int   ammo, attackcount;         /* gamestate.ammo; fire cooldown */
 extern int   weapon, bestweapon;         /* gamestate.weapon/bestweapon (wp_*) */
 /* pushwall (WL_ACT1.C): one secret wall slides at a time. pwallstate 1->384 (3 tiles at

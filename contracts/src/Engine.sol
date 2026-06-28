@@ -21,6 +21,11 @@ contract Engine {
     int256 internal constant PLAYERSIZE = MINDIST;
     int256 internal constant MINACTORDIST = 0x10000;
     uint256 internal constant NUMAREAS = 37; // WL_DEF.H floor tiles AREATILE..AREATILE+36
+    uint256 internal constant ELEVATORTILE = 21; // WL_DEF.H: the elevator (level-exit) switch wall
+    // WL_DEF.H exit_t (subset). Cmd_Use on an elevator switch latches EX_COMPLETED, which
+    // freezes the sim (the level is over) — id's PlayLoop returns; here tick() short-circuits.
+    uint256 internal constant EX_STILLPLAYING = 0;
+    uint256 internal constant EX_COMPLETED = 1;
     int256 internal constant ANGLES = 360;
     int256 internal constant MOVESCALE = 150;
     int256 internal constant BACKMOVESCALE = 100;
@@ -215,6 +220,7 @@ contract Engine {
         uint256 pwState;
         uint256 pwTile; // the wall's texture (oldtile = Map tile at the start)
         uint256 rndindex;
+        uint256 exit; // exit_t: EX_STILLPLAYING until the elevator switch is used (then frozen)
         bytes tiles;
         uint256 w;
         uint256 h;
@@ -266,7 +272,11 @@ contract Engine {
         returns (bytes memory)
     {
         World memory wd = _load(map);
-        _unpack(state, wd); // fills p, doors (dynamic), actors, rndindex
+        _unpack(state, wd); // fills p, doors (dynamic), actors, rndindex, exit
+
+        // level over (elevator used): the sim is frozen — re-pack the unchanged world, so
+        // further inputs are no-ops. Matches the oracle/wasm freeze (id's PlayLoop returns).
+        if (wd.exit != EX_STILLPLAYING) return _pack(wd);
 
         // seed area connectivity from the loaded state (player area + non-closed doors)
         wd.playerArea = _area(wd, wd.p.tilex, wd.p.tiley);
@@ -654,6 +664,7 @@ contract Engine {
         int256 cx;
         int256 cy;
         uint256 dir;
+        bool elevatorok; // only an east/west wall is a usable elevator switch
         int256 angle = wd.p.angle;
         int256 ptx = int256(wd.p.tilex);
         int256 pty = int256(wd.p.tiley);
@@ -661,6 +672,7 @@ contract Engine {
             cx = ptx + 1;
             cy = pty;
             dir = DI_EAST;
+            elevatorok = true;
         } else if (angle < 3 * ANGLES / 8) {
             cx = ptx;
             cy = pty - 1;
@@ -669,6 +681,7 @@ contract Engine {
             cx = ptx - 1;
             cy = pty;
             dir = DI_WEST;
+            elevatorok = true;
         } else {
             cx = ptx;
             cy = pty + 1;
@@ -683,6 +696,14 @@ contract Engine {
         }
         if (wd.p.useheld != 0) return;
         uint256 doortile = _tile(wd, uint256(cy) * wd.w + uint256(cx));
+        // elevator switch: end the level (WL_AGENT.C Cmd_Use). The latch freezes the sim on
+        // the next tick. No tile flip — the Map tilemap is immutable and the freeze prevents
+        // re-trigger (the oracle's 21->22 flip is a render-only detail it can afford to keep).
+        if (doortile == ELEVATORTILE && elevatorok) {
+            wd.p.useheld = 1;
+            wd.exit = EX_COMPLETED;
+            return;
+        }
         if (doortile & 0x80 != 0) {
             wd.p.useheld = 1;
             _operateDoor(wd, doortile & 0x7f);
@@ -1658,7 +1679,8 @@ contract Engine {
 
     // --- state codec: header + player + active-door words + item bitmask + actor words ---
     // header: rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24
-    //         | haspushwall:bit@40  (1 => one trailing pushwall word after the actors:
+    //         | haspushwall:bit@40 | exit:uint8@48  (exit_t: 0 playing, 1 completed — level over)
+    //         (haspushwall: 1 => one trailing pushwall word after the actors:
     //         startx:uint8@0 | starty:uint8@8 | dir:uint8@16 | pwstate:uint16@24 | tile:uint8@40)
     // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
     //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 |
@@ -1685,7 +1707,7 @@ contract Engine {
         uint256 hp = wd.pwActive == 0 ? 0 : 1; // one trailing pushwall word once triggered
         out = new bytes(32 * (2 + ad + iw + na + hp));
         uint256 header = (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((ad & 0xff) << 16)
-            | ((ni & 0xffff) << 24) | (hp << 40);
+            | ((ni & 0xffff) << 24) | (hp << 40) | ((wd.exit & 0xff) << 48);
         uint256 pw = _packPlayer(wd.p);
         assembly {
             mstore(add(out, 0x20), header)
@@ -1733,6 +1755,7 @@ contract Engine {
             pw := calldataload(add(b.offset, 0x20))
         }
         wd.rndindex = header & 0xff;
+        wd.exit = (header >> 48) & 0xff; // exit_t latch (level over => tick() freezes)
         uint256 na = (header >> 8) & 0xff;
         uint256 ad = (header >> 16) & 0xff; // active (non-closed) door count
         uint256 ni = (header >> 24) & 0xffff;
