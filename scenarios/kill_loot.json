@@ -1,0 +1,7 @@
+{
+  "note": "player at (4,8) faces east, fires and kills a nearby guard (which drops a clip, bo_clip2), then walks east onto the drop tile — exercises the enemy-death drop pickup path (taken flip + ammo +4).",
+  "map": "test_room.txt",
+  "player": { "x": 4, "y": 8, "dir": 1 },
+  "enemies": [{ "class": "guard", "x": 6, "y": 8, "dir": 2 }],
+  "checkpoints": "all"
+}

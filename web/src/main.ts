@@ -308,6 +308,7 @@ type State = {
   itemsTaken: boolean[];
   guards: Guard[];
   pushwalls: { sx: number; sy: number; dir: number; state: number; tile: number }[]; // triggered secret walls
+  drops: { tx: number; ty: number; item: number; taken: boolean }[]; // enemy-death loot (KillActor)
   exit: number; // exit_t @48: 0 still playing, 1 completed (elevator used → level over)
 };
 
@@ -318,6 +319,7 @@ function decode(hex: string): State {
   const ad = fld(header, 16, 8); // active (non-closed) doors stored
   const ni = fld(header, 24, 16);
   const iw = ni === 0 ? 0 : Math.ceil(ni / 256);
+  const np = fld(header, 40, 8); // triggered pushwall words (before the drop words)
   const pw = w[1];
   // every door defaults closed; apply the stored active words by their doornum
   const doors: Door[] = Array.from({ length: doorList.length }, () => ({ action: 1, position: 0 }));
@@ -362,9 +364,14 @@ function decode(hex: string): State {
     itemsTaken,
     guards,
     // pushwalls: numpushwalls@40 trailing words after the actors, one per triggered wall (M6)
-    pushwalls: Array.from({ length: fld(header, 40, 8) }, (_, i) => {
+    pushwalls: Array.from({ length: np }, (_, i) => {
       const q = w[2 + ad + iw + n + i];
       return { sx: fld(q, 0, 8), sy: fld(q, 8, 8), dir: fld(q, 16, 8), state: fld(q, 24, 16), tile: fld(q, 40, 8) };
+    }),
+    // enemy-death drops: numdrops@56 trailing words after the pushwalls, one per drop
+    drops: Array.from({ length: fld(header, 56, 8) }, (_, i) => {
+      const q = w[2 + ad + iw + n + np + i];
+      return { tx: fld(q, 0, 8), ty: fld(q, 8, 8), item: fld(q, 16, 8), taken: fld(q, 24, 1) === 1 };
     }),
     exit: fld(header, 48, 8), // level-end latch (elevator)
   };
@@ -853,19 +860,17 @@ function itemColor(n: number): string {
 
 // draw not-yet-taken bonus items as small floor-standing markers, wall-occluded
 function drawItems(px: number, py: number, pa: number, s: State) {
-  for (let i = 0; i < itemList.length; i++) {
-    if (s.itemsTaken[i]) continue;
-    const [tx, ty, n] = itemList[i];
+  const marker = (tx: number, ty: number, n: number) => {
     const dx = (tx + 0.5) * U - px, dy = (ty + 0.5) * U - py;
     const dist = Math.hypot(dx, dy);
-    if (dist < 1) continue;
+    if (dist < 1) return;
     const rel = normDeg(Math.atan2(-dy, dx) / DR - pa);
-    if (Math.abs(rel) > FOV / 2 + 10) continue;
+    if (Math.abs(rel) > FOV / 2 + 10) return;
     const perp = dist * Math.cos(rel * DR);
-    if (perp < 1) continue;
+    if (perp < 1) return;
     const cx = VW / 2 - (rel / (FOV / 2)) * (VW / 2);
     const col = Math.floor(cx);
-    if (col < 0 || col >= VW || perp > zbuf[col] + 0.5) continue; // off-screen / behind a wall
+    if (col < 0 || col >= VW || perp > zbuf[col] + 0.5) return; // off-screen / behind a wall
     const wallH = (U / perp) * PROJ;
     const floorY = VH / 2 + wallH / 2;
     const sz = Math.max(2, wallH * 0.2);
@@ -875,6 +880,12 @@ function drawItems(px: number, py: number, pa: number, s: State) {
     vctx.fillRect(cx - sz / 2, floorY - sz, sz, sz); // marker
     vctx.fillStyle = "rgba(255,255,255,0.5)";
     vctx.fillRect(cx - sz / 2, floorY - sz, sz, Math.max(1, sz / 6)); // glint
+  };
+  for (let i = 0; i < itemList.length; i++) {
+    if (!s.itemsTaken[i]) marker(itemList[i][0], itemList[i][1], itemList[i][2]); // map items
+  }
+  for (const d of s.drops) {
+    if (!d.taken) marker(d.tx, d.ty, d.item); // enemy-death loot (clip / machine gun)
   }
 }
 
@@ -1436,6 +1447,11 @@ function applyAudio(before: State, after: State) {
       const it = itemList[i];
       if (it) playPos(pickupSnd(it[2]), it[0] + 0.5, it[1] + 0.5);
     }
+  }
+  // enemy-death drops: a drop's taken bit flipping = the player grabbed the loot
+  for (let i = 0; i < after.drops.length; i++) {
+    const d = after.drops[i];
+    if (d.taken && !before.drops[i]?.taken) playPos(pickupSnd(d.item), d.tx + 0.5, d.ty + 0.5);
   }
   if (!before.exit && after.exit) A.play("LEVELDONESND", 0, 1);
 }

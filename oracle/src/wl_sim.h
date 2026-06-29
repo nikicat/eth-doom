@@ -249,6 +249,7 @@ typedef struct {
 } statobj_t;
 extern statobj_t statobjlist[MAXSTATS];
 extern int  numstats;
+extern int  firstdrop; /* statobjlist index where runtime enemy-death drops begin (= map item count) */
 extern int  keys;   /* gamestate.keys bitmask (bo_key1..4 -> bits 0..3) */
 extern long score;  /* gamestate.score */
 

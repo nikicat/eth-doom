@@ -75,6 +75,7 @@ void SpawnPlayer(int tilex, int tiley, int dir)
     player->areanumber = areamap[tilex][tiley];
     Thrust(0, 0); /* sets tilex/tiley + movement bookkeeping */
     ConnectAreas();    /* seed areabyplayer from the player's starting area */
+    firstdrop = numstats; /* all map statics are spawned before the player; drops append past here */
 }
 
 /* WL_AGENT.C TryMove — true if the player's PLAYERSIZE box hits no wall.

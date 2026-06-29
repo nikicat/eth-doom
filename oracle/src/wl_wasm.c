@@ -139,23 +139,26 @@ static void put(unsigned char *w, int off, int width, unsigned int val) {
 }
 
 EXPORT int read_state(void) {
-    int nd = doornum, ni = numstats, na = numenemies;
+    int nd = doornum, ni = firstdrop, na = numenemies;  /* ni = MAP items (taken bitmask) */
+    int ndrop = numstats - firstdrop;                   /* runtime enemy-death drops */
     int iw = ni == 0 ? 0 : (ni + 255) / 256;
     int ad = 0;
     for (int i = 0; i < nd; i++)
         if (doorobjlist[i].action != dr_closed) ad++;
     int np = pwall_count;          /* one trailing word per triggered pushwall */
-    int nwords = 2 + ad + iw + na + np;
+    int nwords = 2 + ad + iw + na + np + ndrop;
     unsigned char *out = g_state;
     memset(out, 0, 32 * nwords);
 
-    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 | numpushwalls@40 | exit@48 */
+    /* header: rndindex@0 | numactors@8 | numactivedoors@16 | numitems@24 | numpushwalls@40
+     *         | exit@48 | numdrops@56 */
     put(out, 0, 8, rndindex & 0xff);
     put(out, 8, 8, na & 0xff);
     put(out, 16, 8, ad & 0xff);
     put(out, 24, 16, ni & 0xffff);
     put(out, 40, 8, np & 0xff);
     put(out, 48, 8, playstate & 0xff);
+    put(out, 56, 8, ndrop & 0xff);
 
     /* player word */
     unsigned char *pw = out + 32;
@@ -222,6 +225,16 @@ EXPORT int read_state(void) {
         put(pww, 16, 8, pw_dir[i] & 0xff);
         put(pww, 24, 16, pw_state[i] & 0xffff);
         put(pww, 40, 8, pw_oldtile[i] & 0xff);
+    }
+
+    /* trailing enemy-death drop words (one per drop): tilex@0 | tiley@8 | itemnumber@16 | taken@24 */
+    for (int i = 0; i < ndrop; i++) {
+        statobj_t *s = &statobjlist[firstdrop + i];
+        unsigned char *dw = out + 32 * (2 + ad + iw + na + np + i);
+        put(dw, 0, 8, s->tilex & 0xff);
+        put(dw, 8, 8, s->tiley & 0xff);
+        put(dw, 16, 8, s->itemnumber & 0xff);
+        put(dw, 24, 1, s->taken & 1);
     }
     return 32 * nwords;
 }

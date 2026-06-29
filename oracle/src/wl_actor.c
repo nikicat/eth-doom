@@ -62,6 +62,7 @@ int       useheld;                        /* buttonheld[bt_use] edge latch */
 /* WL_ACT1.C bonus statics + WL_AGENT.C gamestate bits the pickups touch. */
 statobj_t statobjlist[MAXSTATS];
 int       numstats;
+int       firstdrop; /* index in statobjlist where runtime enemy-death drops begin (= map item count) */
 int       keys;
 long      score;
 
@@ -892,16 +893,21 @@ static void T_Shoot(objtype *ob) {
     }
 }
 
-/* WL_STATE.C KillActor (guard: die animation, no longer shootable; points/item dropped). */
+/* WL_STATE.C KillActor: die animation, no longer shootable, and PlaceItemType drops the
+ * corpse's loot at the death tile — guard/officer a used clip (bo_clip2), SS a machine gun;
+ * the dog drops nothing. (id also GivePoints here; kill-points stay dropped — score is
+ * treasure only, as documented.) The drop is a runtime SpawnStatic, so it appends past the
+ * map items (statobjlist[firstdrop..]) and rides the packed state's separate drop list. */
 static void KillActor(objtype *ob) {
-    int die = S_GRDDIE1;
-    if (ob->obclass == ssobj)           die = S_SSDIE1;
-    else if (ob->obclass == dogobj)     die = S_DOGDIE1;
-    else if (ob->obclass == officerobj) die = S_OFCDIE1;
+    int die = S_GRDDIE1, drop = bo_clip2;                       /* guard default */
+    if (ob->obclass == ssobj)           { die = S_SSDIE1;  drop = bo_machinegun; }
+    else if (ob->obclass == dogobj)     { die = S_DOGDIE1; drop = -1; }          /* dog: no drop */
+    else if (ob->obclass == officerobj) { die = S_OFCDIE1; }                     /* drop stays bo_clip2 */
     ob->tilex = ob->x >> TILESHIFT;
     ob->tiley = ob->y >> TILESHIFT;
     NewState(ob, die);
     ob->flags &= ~FL_SHOOTABLE;
+    if (drop >= 0) SpawnStatic(ob->tilex, ob->tiley, drop);    /* PlaceItemType(corpse loot) */
 }
 
 /* WL_STATE.C DamageActor (guard is in attack mode here, so no double-damage / FirstSighting). */

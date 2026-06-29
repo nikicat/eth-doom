@@ -38,10 +38,19 @@ static void emit(long tick)
                    doorposition[i], doorobjlist[i].action, doorobjlist[i].ticcount);
         printf("]");
     }
-    if (numstats > 0) {
+    if (firstdrop > 0) {   /* map items: just the taken bit (static data comes from the Map) */
         printf(",\"items\":[");
-        for (int i = 0; i < numstats; i++)
+        for (int i = 0; i < firstdrop; i++)
             printf("%s%d", i ? "," : "", statobjlist[i].taken);
+        printf("]");
+    }
+    if (numstats > firstdrop) {   /* runtime enemy-death drops: full record (not in the Map) */
+        printf(",\"drops\":[");
+        for (int i = firstdrop; i < numstats; i++) {
+            statobj_t *s = &statobjlist[i];
+            printf("%s{\"tx\":%u,\"ty\":%u,\"item\":%u,\"taken\":%u}", i > firstdrop ? "," : "",
+                   s->tilex, s->tiley, s->itemnumber, s->taken);
+        }
         printf("]");
     }
     printf(",\"keys\":%d,\"score\":%ld", keys, score);

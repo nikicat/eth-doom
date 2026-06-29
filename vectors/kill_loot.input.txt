@@ -1,0 +1,200 @@
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# hold fire — wake + kill the nearby guard
+0 0 1
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0
+# walk east onto the dropped clip
+0 -35 0

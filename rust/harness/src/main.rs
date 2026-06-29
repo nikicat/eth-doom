@@ -54,6 +54,7 @@ struct Snap {
     bestweapon: i64,
     exit: i64,             // exit_t: 0 still playing, 1 completed (elevator used)
     pwalls: Vec<[i64; 5]>, // one per triggered secret wall: sx, sy, dir, state, tile
+    drops: Vec<[i64; 4]>,  // one per enemy-death drop: tx, ty, item, taken
 }
 
 fn load_golden(path: &str) -> Result<Vec<Snap>> {
@@ -97,6 +98,12 @@ fn load_golden(path: &str) -> Result<Vec<Snap>> {
                 arr.iter().map(|p| {
                     let f = |k: &str| p[k].as_i64().unwrap();
                     [f("sx"), f("sy"), f("dir"), f("state"), f("tile")]
+                }).collect()
+            }),
+            drops: v.get("drops").and_then(|x| x.as_array()).map_or_else(Vec::new, |arr| {
+                arr.iter().map(|d| {
+                    let f = |k: &str| d[k].as_i64().unwrap();
+                    [f("tx"), f("ty"), f("item"), f("taken")]
                 }).collect()
             }),
         });
@@ -282,6 +289,22 @@ fn decode_and_check(state: &[u8], want: &Snap, tick: i64) -> Result<()> {
     }
     if got_pwalls != want.pwalls {
         bail!("tic {tick} PUSHWALL mismatch\n  got  {:?}\n  want {:?}", got_pwalls, want.pwalls);
+    }
+
+    // enemy-death drops: numdrops@56 trailing words after the pushwalls, one per drop
+    let nd_drop = field(header, 56, 8) as usize;
+    let mut got_drops = Vec::with_capacity(nd_drop);
+    for k in 0..nd_drop {
+        let dw = word(state, 2 + ad + iw + n + np + k);
+        got_drops.push([
+            field(dw, 0, 8) as i64,  // tilex
+            field(dw, 8, 8) as i64,  // tiley
+            field(dw, 16, 8) as i64, // itemnumber
+            field(dw, 24, 1) as i64, // taken
+        ]);
+    }
+    if got_drops != want.drops {
+        bail!("tic {tick} DROP mismatch\n  got  {:?}\n  want {:?}", got_drops, want.drops);
     }
     Ok(())
 }

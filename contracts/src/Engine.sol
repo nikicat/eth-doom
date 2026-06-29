@@ -215,6 +215,11 @@ contract Engine {
         // packed word == the wire format: sx@0 | sy@8 | dir@16 | state@24(16) | tile@40, so
         // pack/unpack are plain copies. The Engine reconstructs the tilemap from these each tick.
         uint256[] pwalls;
+        // dynamic enemy-death drops: one per corpse that dropped loot (id WL_STATE.C KillActor
+        // PlaceItemType — guard/officer a used clip, SS a machine gun). Not in the immutable Map,
+        // so each carries its full static data + taken bit as a packed wire record:
+        // tilex@0 | tiley@8 | itemnumber@16 | taken@24. Grows by realloc as enemies die (like pwalls).
+        uint256[] drops;
         uint256 rndindex;
         uint256 exit; // exit_t: EX_STILLPLAYING until the elevator switch is used (then frozen)
         bytes tiles;
@@ -392,26 +397,16 @@ contract Engine {
         a.dir = int256((dir & 3) * 2); // 4-way 0..3 -> dirtype east/north/west/south
         a.active = 1; // ac_yes
         a.flags = FL_SHOOTABLE;
-        a.speed = SPDPATROL;
         a.temp2 = 0;
-        if (which == EN_SS) {
-            a.state = S_SSSTAND;
-            a.obclass = SSOBJ;
-            a.hitpoints = HP_SS;
-        } else if (which == EN_DOG) {
-            a.state = S_DOGSTAND;
-            a.obclass = DOGOBJ;
-            a.hitpoints = HP_DOG;
-            a.speed = SPDDOG;
-        } else if (which == EN_OFFICER) {
-            a.state = S_OFCSTAND;
-            a.obclass = OFFICEROBJ;
-            a.hitpoints = HP_OFFICER;
-        } else {
-            a.state = S_GRDSTAND; // tictime 0 -> ticcount 0, think runs each tic
-            a.obclass = GUARDOBJ;
-            a.hitpoints = 25;
-        }
+        // obclass = guardobj + enemy_t (WL_DEF.H); STAND state = the class's chase1 - 1
+        // (S_xSTAND immediately precedes S_xCHASE1 for every class). Stats via _classInfo.
+        a.obclass = GUARDOBJ + uint8(which);
+        (uint256 chase,,,,,) = _classInfo(a.obclass);
+        a.state = chase - 1; // S_xSTAND: tictime 0 -> ticcount 0, think runs each tic
+        a.speed = which == EN_DOG ? SPDDOG : SPDPATROL;
+        a.hitpoints = which == EN_SS
+            ? HP_SS
+            : which == EN_DOG ? HP_DOG : which == EN_OFFICER ? HP_OFFICER : int256(25);
     }
 
     // ---------------- player movement (WL_AGENT.C) ----------------
@@ -787,14 +782,10 @@ contract Engine {
         int256 ny = cy + _pwDY(dir);
         if (nx < 0 || nx >= int256(wd.w) || ny < 0 || ny >= int256(wd.h)) return;
         if (_actorOnTile(wd, nx, ny)) return; // NOWAY: blocked
-        // append (memory arrays can't .push — grow into a length+1 copy); state starts at 1
-        uint256 n = wd.pwalls.length;
-        uint256[] memory next = new uint256[](n + 1);
-        for (uint256 i = 0; i < n; i++) {
-            next[i] = wd.pwalls[i];
-        }
-        next[n] = uint256(cx) | (uint256(cy) << 8) | (dir << 16) | (uint256(1) << 24) | (oldtile << 40);
-        wd.pwalls = next;
+        // append a wire record (state starts at 1); memory arrays can't .push — grow a copy
+        wd.pwalls = _appendWord(
+            wd.pwalls, uint256(cx) | (uint256(cy) << 8) | (dir << 16) | (uint256(1) << 24) | (oldtile << 40)
+        );
         _applyPushwall(wd); // extend the wall into the destination tile
     }
 
@@ -892,6 +883,15 @@ contract Engine {
             uint256 base = i * 3;
             if (wd.p.tilex == _itemByte(wd, base) && wd.p.tiley == _itemByte(wd, base + 1)) {
                 if (_getBonus(wd, _itemByte(wd, base + 2))) wd.itemTaken[wIdx] |= bit;
+            }
+        }
+        // runtime enemy-death drops (not in the Map) — scanned AFTER the map items, in insertion
+        // order, exactly like the oracle's single statobjlist walk. Record: tilex@0|tiley@8|item@16|taken@24.
+        for (uint256 i = 0; i < wd.drops.length; i++) {
+            uint256 r = wd.drops[i];
+            if ((r >> 24) & 1 != 0) continue; // already taken
+            if (wd.p.tilex == (r & 0xff) && wd.p.tiley == ((r >> 8) & 0xff)) {
+                if (_getBonus(wd, (r >> 16) & 0xff)) wd.drops[i] = r | (uint256(1) << 24);
             }
         }
     }
@@ -1258,9 +1258,7 @@ contract Engine {
             if (dist == 0 || (dist == 1 && a.distance < 0x4000)) chance = 300;
             else chance = (TICS << 4) / dist;
             if (int256(_rnd(wd)) < chance) {
-                uint256 shoot = S_GRDSHOOT1;
-                if (a.obclass == SSOBJ) shoot = S_SSSHOOT1;
-                else if (a.obclass == OFFICEROBJ) shoot = S_OFCSHOOT1;
+                (, uint256 shoot,,,,) = _classInfo(a.obclass);
                 _newState(a, shoot);
                 return;
             }
@@ -1401,40 +1399,69 @@ contract Engine {
             if (int256(_rnd(wd)) / 12 < dist) return; // missed
             damage = int256(_rnd(wd)) / 6;
         }
-        _damageActor(c, damage);
+        _damageActor(wd, c, damage);
     }
 
     /// WL_AGENT.C KnifeAttack — melee within KNIFEDIST, silent + free (no ammo).
     function _knifeAttack(World memory wd) internal pure {
         int256 closest = _findShotTarget(wd, KNIFEDIST);
         if (closest < 0) return;
-        _damageActor(wd.actors[uint256(closest)], int256(_rnd(wd)) >> 4);
+        _damageActor(wd, wd.actors[uint256(closest)], int256(_rnd(wd)) >> 4);
     }
 
     /// WL_STATE.C DamageActor (guard is in attack mode here: no double-damage / FirstSighting).
-    function _damageActor(Actor memory a, int256 damage) internal pure {
+    function _damageActor(World memory wd, Actor memory a, int256 damage) internal pure {
         if ((a.flags & FL_ATTACKMODE) == 0) damage = damage * 2;
         a.hitpoints -= damage;
         if (a.hitpoints <= 0) {
-            _killActor(a);
+            _killActor(wd, a);
             return;
         }
         if (a.obclass == DOGOBJ) return; // dogs have no pain state (1 HP)
-        if (a.obclass == SSOBJ) _newState(a, (a.hitpoints & 1) == 1 ? S_SSPAIN : S_SSPAIN1);
-        else if (a.obclass == OFFICEROBJ) _newState(a, (a.hitpoints & 1) == 1 ? S_OFCPAIN : S_OFCPAIN1);
-        else _newState(a, (a.hitpoints & 1) == 1 ? S_GRDPAIN : S_GRDPAIN1);
+        // S_xPAIN (odd hp) / S_xPAIN1 (even) are consecutive; _classInfo returns pain1.
+        (,,, uint256 pain1,,) = _classInfo(a.obclass);
+        _newState(a, (a.hitpoints & 1) == 1 ? pain1 - 1 : pain1);
     }
 
-    /// WL_STATE.C KillActor (die animation, no longer shootable).
-    function _killActor(Actor memory a) internal pure {
-        uint256 die = S_GRDDIE1;
-        if (a.obclass == SSOBJ) die = S_SSDIE1;
-        else if (a.obclass == DOGOBJ) die = S_DOGDIE1;
-        else if (a.obclass == OFFICEROBJ) die = S_OFCDIE1;
+    /// WL_STATE.C KillActor: die animation, no longer shootable, and PlaceItemType drops the
+    /// corpse's loot at the death tile — guard/officer a used clip (BO_CLIP2), SS a machine gun;
+    /// the dog drops nothing. The drop isn't in the immutable Map, so it's appended to the dynamic
+    /// `wd.drops` wire-record list (carried in the packed state), mirroring the oracle's SpawnStatic.
+    function _killActor(World memory wd, Actor memory a) internal pure {
+        (,, uint256 die,,, uint256 drop) = _classInfo(a.obclass);
         a.tilex = uint256(a.x >> 16);
         a.tiley = uint256(a.y >> 16);
         _newState(a, die);
         a.flags &= ~FL_SHOOTABLE;
+        if (drop != 0) {
+            // wire record tilex@0|tiley@8|itemnumber@16 (taken@24 = 0), appended like a pushwall
+            wd.drops = _appendWord(wd.drops, (a.tilex & 0xff) | ((a.tiley & 0xff) << 8) | ((drop & 0xff) << 16));
+        }
+    }
+
+    /// Per-obclass state-graph anchors + stats, centralizing what were ~4 separate if/else chains
+    /// (FirstSighting, T_Chase shoot, DamageActor pain, KillActor die+drop). Returns the class's
+    /// chase1 / shoot1 / die1 / pain1 graph anchors, its FirstSighting speed multiplier, and the
+    /// loot KillActor drops (id WL_STATE.C PlaceItemType): guard/officer a used clip, SS a machine
+    /// gun, dog nothing (drop 0). Pain frame is pain1 or pain1-1 by (hitpoints&1) at the call site.
+    function _classInfo(uint256 obclass)
+        internal
+        pure
+        returns (uint256 chase, uint256 shoot, uint256 die, uint256 pain1, uint256 spd, uint256 drop)
+    {
+        if (obclass == SSOBJ) return (S_SSCHASE1, S_SSSHOOT1, S_SSDIE1, S_SSPAIN1, 4, BO_MACHINEGUN);
+        if (obclass == DOGOBJ) return (S_DOGCHASE1, 0, S_DOGDIE1, 0, 2, 0);
+        if (obclass == OFFICEROBJ) return (S_OFCCHASE1, S_OFCSHOOT1, S_OFCDIE1, S_OFCPAIN1, 5, BO_CLIP2);
+        return (S_GRDCHASE1, S_GRDSHOOT1, S_GRDDIE1, S_GRDPAIN1, 3, BO_CLIP2); // guard
+    }
+
+    /// Append one word to a memory array (memory arrays can't .push — grow into a length+1 copy).
+    /// Shared by the pushwall + enemy-death-drop sparse lists.
+    function _appendWord(uint256[] memory arr, uint256 v) internal pure returns (uint256[] memory out) {
+        uint256 n = arr.length;
+        out = new uint256[](n + 1);
+        for (uint256 i = 0; i < n; i++) out[i] = arr[i];
+        out[n] = v;
     }
 
     /// WL_PLAY.C DoActor — state-machine advance (no actorat marking; single guard).
@@ -1486,19 +1513,9 @@ contract Engine {
     /// WL_STATE.C FirstSighting: wake into the class's chase with its speed multiplier
     /// (guard 3x, SS 4x, dog 2x) and set attack flags.
     function _firstSighting(Actor memory a) internal pure {
-        if (a.obclass == SSOBJ) {
-            _newState(a, S_SSCHASE1);
-            a.speed *= 4;
-        } else if (a.obclass == DOGOBJ) {
-            _newState(a, S_DOGCHASE1);
-            a.speed *= 2;
-        } else if (a.obclass == OFFICEROBJ) {
-            _newState(a, S_OFCCHASE1);
-            a.speed *= 5;
-        } else {
-            _newState(a, S_GRDCHASE1);
-            a.speed *= 3;
-        }
+        (uint256 chase,,,, uint256 spd,) = _classInfo(a.obclass); // chase anchor + speed mult (3/4/5/2)
+        _newState(a, chase);
+        a.speed *= int256(spd);
         if (a.distance < 0) a.distance = 0;
         a.flags |= FL_ATTACKMODE | FL_FIRSTATTACK;
     }
@@ -1584,85 +1601,28 @@ contract Engine {
     }
 
     /// WL_ACT2.C guard state graph: (tictime, think, action, next).
+    // WL_ACT2.C enemy state graph (guard 0..15, SS 16..37, dog 38..53, officer 54..70), packed
+    // 4 bytes/state: tictime | think(TH_*) | action(0/AC_SHOOT 1/AC_DEATHSCREAM 2/AC_BITE 3) | nxt.
+    // Generated from the per-state table; indexed by `_gstate` (replaces a 71-branch if-chain — far
+    // smaller bytecode). think: 0 none, 1 TH_STAND, 2 TH_CHASE, 4 TH_DOGCHASE.
+    bytes constant GSTATES =
+        hex"000100000a02000203000003080200040a02000503000006080200011400000814000109140000010f00020b0f00000c0f00000d0000000d0a0000010a000001000100100a02001203000013080200140a020015030000160802001114000018140001190a00001a0a00011b0a00001c0a00011d0a00001e0a00011f0a0000110f0002210f0000220f000023000000230a0000110a000011000100260a040028030000290804002a0a04002b0300002c080400270a00002e0a00032f0a0000300a0000310a0000270f0002330f0000340f00003500000035000100360a020038030000390802003a0a02003b0300003c080200370600003e1400013f0a0000370b0002410b0000420b0000430b000044000000440a0000370a000037";
+
+    /// WL_ACT2.C state -> (tictime, think, action, next-state), read from the packed GSTATES table.
     function _gstate(uint256 s)
         internal
         pure
         returns (uint256 tictime, uint256 think, uint256 action, uint256 nxt)
     {
-        if (s == 0) return (0, TH_STAND, 0, 0); // s_grdstand
-        if (s == 1) return (10, TH_CHASE, 0, 2); // chase1
-        if (s == 2) return (3, 0, 0, 3); // chase1s
-        if (s == 3) return (8, TH_CHASE, 0, 4); // chase2
-        if (s == 4) return (10, TH_CHASE, 0, 5); // chase3
-        if (s == 5) return (3, 0, 0, 6); // chase3s
-        if (s == 6) return (8, TH_CHASE, 0, 1); // chase4
-        if (s == 7) return (20, 0, 0, 8); // shoot1
-        if (s == 8) return (20, 0, 1, 9); // shoot2 (AC_SHOOT)
-        if (s == 9) return (20, 0, 0, 1); // shoot3
-        if (s == 10) return (15, 0, 2, 11); // die1 (AC_DEATHSCREAM)
-        if (s == 11) return (15, 0, 0, 12); // die2
-        if (s == 12) return (15, 0, 0, 13); // die3
-        if (s == 13) return (0, 0, 0, 13); // die4 (corpse)
-        if (s == 14) return (10, 0, 0, 1); // pain  -> chase1
-        if (s == 15) return (10, 0, 0, 1); // pain1 -> chase1
-        // --- SS (states 16..37): same graph as the guard, but a 4-shot burst ---
-        if (s == 16) return (0, TH_STAND, 0, 16); // s_ssstand
-        if (s == 17) return (10, TH_CHASE, 0, 18); // sschase1
-        if (s == 18) return (3, 0, 0, 19); // sschase1s
-        if (s == 19) return (8, TH_CHASE, 0, 20); // sschase2
-        if (s == 20) return (10, TH_CHASE, 0, 21); // sschase3
-        if (s == 21) return (3, 0, 0, 22); // sschase3s
-        if (s == 22) return (8, TH_CHASE, 0, 17); // sschase4
-        if (s == 23) return (20, 0, 0, 24); // ssshoot1
-        if (s == 24) return (20, 0, 1, 25); // ssshoot2 (AC_SHOOT)
-        if (s == 25) return (10, 0, 0, 26); // ssshoot3
-        if (s == 26) return (10, 0, 1, 27); // ssshoot4 (AC_SHOOT)
-        if (s == 27) return (10, 0, 0, 28); // ssshoot5
-        if (s == 28) return (10, 0, 1, 29); // ssshoot6 (AC_SHOOT)
-        if (s == 29) return (10, 0, 0, 30); // ssshoot7
-        if (s == 30) return (10, 0, 1, 31); // ssshoot8 (AC_SHOOT)
-        if (s == 31) return (10, 0, 0, 17); // ssshoot9 -> sschase1
-        if (s == 32) return (15, 0, 2, 33); // ssdie1 (AC_DEATHSCREAM)
-        if (s == 33) return (15, 0, 0, 34); // ssdie2
-        if (s == 34) return (15, 0, 0, 35); // ssdie3
-        if (s == 35) return (0, 0, 0, 35); // ssdie4 (corpse)
-        if (s == 36) return (10, 0, 0, 17); // sspain  -> sschase1
-        if (s == 37) return (10, 0, 0, 17); // sspain1 -> sschase1
-        // --- dog (states 38..53): melee chase + jump/bite, no pain ---
-        if (s == 38) return (0, TH_STAND, 0, 38); // s_dogstand
-        if (s == 39) return (10, TH_DOGCHASE, 0, 40); // dogchase1
-        if (s == 40) return (3, 0, 0, 41); // dogchase1s
-        if (s == 41) return (8, TH_DOGCHASE, 0, 42); // dogchase2
-        if (s == 42) return (10, TH_DOGCHASE, 0, 43); // dogchase3
-        if (s == 43) return (3, 0, 0, 44); // dogchase3s
-        if (s == 44) return (8, TH_DOGCHASE, 0, 39); // dogchase4
-        if (s == 45) return (10, 0, 0, 46); // dogjump1
-        if (s == 46) return (10, 0, AC_BITE, 47); // dogjump2 (T_Bite)
-        if (s == 47) return (10, 0, 0, 48); // dogjump3
-        if (s == 48) return (10, 0, 0, 49); // dogjump4
-        if (s == 49) return (10, 0, 0, 39); // dogjump5 -> dogchase1
-        if (s == 50) return (15, 0, 2, 51); // dogdie1 (AC_DEATHSCREAM)
-        if (s == 51) return (15, 0, 0, 52); // dogdie2
-        if (s == 52) return (15, 0, 0, 53); // dogdie3
-        if (s == 53) return (0, 0, 0, 53); // dogdead
-        // --- officer (states 54..70): guard-like, faster shot, 5 die frames ---
-        if (s == 54) return (0, TH_STAND, 0, 54); // ofcstand
-        if (s == 55) return (10, TH_CHASE, 0, 56); // ofcchase1
-        if (s == 56) return (3, 0, 0, 57); // ofcchase1s
-        if (s == 57) return (8, TH_CHASE, 0, 58); // ofcchase2
-        if (s == 58) return (10, TH_CHASE, 0, 59); // ofcchase3
-        if (s == 59) return (3, 0, 0, 60); // ofcchase3s
-        if (s == 60) return (8, TH_CHASE, 0, 55); // ofcchase4
-        if (s == 61) return (6, 0, 0, 62); // ofcshoot1
-        if (s == 62) return (20, 0, 1, 63); // ofcshoot2 (AC_SHOOT)
-        if (s == 63) return (10, 0, 0, 55); // ofcshoot3 -> ofcchase1
-        if (s == 64) return (11, 0, 2, 65); // ofcdie1 (AC_DEATHSCREAM)
-        if (s == 65) return (11, 0, 0, 66); // ofcdie2
-        if (s == 66) return (11, 0, 0, 67); // ofcdie3
-        if (s == 67) return (11, 0, 0, 68); // ofcdie4
-        if (s == 68) return (0, 0, 0, 68); // ofcdie5 (corpse)
-        if (s == 69) return (10, 0, 0, 55); // ofcpain  -> ofcchase1
-        return (10, 0, 0, 55); // ofcpain1 (s==70) -> ofcchase1
+        bytes memory t = GSTATES;
+        uint256 o = s * 4;
+        assembly {
+            let w := mload(add(add(t, 0x20), o)) // 4 packed bytes at the MSB end of w
+            tictime := byte(0, w)
+            think := byte(1, w)
+            action := byte(2, w)
+            nxt := byte(3, w)
+        }
     }
 
     // ---------------- helpers ----------------
@@ -1695,9 +1655,12 @@ contract Engine {
 
     // --- state codec: header + player + active-door words + item bitmask + actor words ---
     // header: rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24
-    //         | numpushwalls:uint8@40 | exit:uint8@48  (exit_t: 0 playing, 1 completed — level over)
+    //         | numpushwalls:uint8@40 | exit:uint8@48 | numdrops:uint8@56
+    //         (exit_t: 0 playing, 1 completed — level over)
     //         (numpushwalls trailing words after the actors, one per triggered secret wall:
     //         startx:uint8@0 | starty:uint8@8 | dir:uint8@16 | pwstate:uint16@24 | tile:uint8@40)
+    //         (numdrops trailing words after the pushwalls, one per enemy-death drop — runtime
+    //         loot not in the Map: tilex:uint8@0 | tiley:uint8@8 | itemnumber:uint8@16 | taken:bit@24)
     // player: x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
     //         tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 |
     //         useheld:bit@176 | keys:uint8@184 | score:uint32@192 | weapon:uint8@224 |
@@ -1709,7 +1672,7 @@ contract Engine {
     // actor:  x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88 |
     //         ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 |
     //         obclass:uint8@168 | speed:int32@176 | active:uint8@208 | temp2:int16@216
-    // blob order: [header][player][activedoor_0..][itemword_0..][actor_0..]
+    // blob order: [header][player][activedoor_0..][itemword_0..][actor_0..][pushwall_0..][drop_0..]
 
     function _pack(World memory wd) internal pure returns (bytes memory out) {
         uint256 nd = wd.doors.length;
@@ -1721,9 +1684,10 @@ contract Engine {
             if (wd.doors[i].action != DR_CLOSED) ad++;
         }
         uint256 np = wd.pwalls.length; // one trailing word per triggered pushwall
-        out = new bytes(32 * (2 + ad + iw + na + np));
+        uint256 ndrop = wd.drops.length; // one trailing word per enemy-death drop
+        out = new bytes(32 * (2 + ad + iw + na + np + ndrop));
         uint256 header = (wd.rndindex & 0xff) | ((na & 0xff) << 8) | ((ad & 0xff) << 16)
-            | ((ni & 0xffff) << 24) | ((np & 0xff) << 40) | ((wd.exit & 0xff) << 48);
+            | ((ni & 0xffff) << 24) | ((np & 0xff) << 40) | ((wd.exit & 0xff) << 48) | ((ndrop & 0xff) << 56);
         uint256 pw = _packPlayer(wd.p);
         assembly {
             mstore(add(out, 0x20), header)
@@ -1755,6 +1719,13 @@ contract Engine {
             uint256 pww = wd.pwalls[i];
             assembly {
                 mstore(add(add(out, 0x60), mul(add(add(add(ad, iw), na), i), 0x20)), pww)
+            }
+        }
+        for (uint256 i = 0; i < ndrop; i++) {
+            // a drop is already the wire format (tilex@0 | tiley@8 | itemnumber@16 | taken@24)
+            uint256 dw = wd.drops[i];
+            assembly {
+                mstore(add(add(out, 0x60), mul(add(add(add(add(ad, iw), na), np), i), 0x20)), dw)
             }
         }
     }
@@ -1806,6 +1777,15 @@ contract Engine {
                 pww := calldataload(add(b.offset, add(0x40, mul(add(add(add(ad, iw), na), i), 0x20))))
             }
             wd.pwalls[i] = pww & 0xffffffffffff; // 48-bit packed record (the wire format)
+        }
+        uint256 ndrop = (header >> 56) & 0xff; // enemy-death drop count
+        wd.drops = new uint256[](ndrop);
+        for (uint256 i = 0; i < ndrop; i++) {
+            uint256 dw;
+            assembly {
+                dw := calldataload(add(b.offset, add(0x40, mul(add(add(add(add(ad, iw), na), np), i), 0x20))))
+            }
+            wd.drops[i] = dw & 0x1ffffff; // 25-bit packed record: tilex|tiley|itemnumber|taken
         }
     }
 
