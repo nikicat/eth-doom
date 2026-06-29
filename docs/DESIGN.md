@@ -49,8 +49,8 @@ Session  per-game packed world state                    raycaster view       gol
 `Engine.sol`, the harness, and the web decoder:
 
 - **header**: `rndindex:uint8@0 | numactors:uint8@8 | numactivedoors:uint8@16 | numitems:uint16@24 |
-  numpushwalls:uint8@40 | exit:uint8@48` (exit_t — 0 still playing, 1 completed; once nonzero the
-  Engine freezes, re-packing the world unchanged so further inputs are no-ops)
+  numpushwalls:uint8@40 | exit:uint8@48 | numdrops:uint8@56` (exit_t — 0 still playing, 1 completed;
+  once nonzero the Engine freezes, re-packing the world unchanged so further inputs are no-ops)
 - **player**: `x:int32@0 | y:int32@32 | angle:uint16@64 | anglefrac:int32@80 | tilex:uint8@112 |
   tiley:uint8@120 | health:int16@128 | ammo:int16@144 | attackcount:int16@160 | useheld:bit@176 |
   keys:uint8@184 | score:uint32@192 | weapon:uint8@224 | bestweapon:uint8@232`
@@ -60,6 +60,7 @@ Session  per-game packed world state                    raycaster view       gol
   vertical/lock come from the `Map`, indexed by doornum = scan order.
 - **items**: `ceil(numitems/256)` words; bit *i* = item *i* taken (the static tilex/tiley/itemnumber
   come from the `Map`). The dynamic per-item state is one bit, so the whole list packs into ~one word.
+  (`numitems` counts only the **Map** items; enemy-death drops are a separate list — below.)
 - **actor**: `x:int32@0 | y:int32@32 | tilex:uint8@64 | tiley:uint8@72 | dir:uint8@80 | state:uint8@88
   | ticcount:int16@96 | distance:int32@112 | hitpoints:int16@144 | flags:uint8@160 | obclass:uint8@168
   | speed:int32@176 | active:uint8@208 | temp2:int16@216`
@@ -68,6 +69,12 @@ Session  per-game packed world state                    raycaster view       gol
   may slide at once (E1L1 has 5); each record persists once triggered (the relocation is permanent).
   The `Map` tilemap is immutable, so the Engine reconstructs the effective tilemap each tick from these.
   (The Engine stores each record as exactly this packed word, so pack/unpack are plain copies.)
+- **drops** (`numdrops@56` trailing words after the pushwalls, one per enemy-death drop):
+  `tilex:uint8@0 | tiley:uint8@8 | itemnumber:uint8@16 | taken:bit@24`. Loot is **runtime-spawned**
+  (`KillActor` → `PlaceItemType`), so unlike Map items it isn't in the immutable `Map` — each drop
+  carries its full static data + taken bit here. The list grows as enemies die (one append per kill,
+  like a pushwall record) and persists with its taken bit (a corpse's clip stays pickable until grabbed).
+  Picked up by the same player-on-tile `GetBonus` as Map items, scanned right after them.
 
 ## Methodology: faithful transliteration, validated by a C oracle
 
@@ -122,6 +129,17 @@ are deviations from id's *render-coupled* code, not between our two implementati
   effects (`GetBonus`: ammo/health clamps, "skip if full", keys, score) are faithful; only render/audio
   bits (bonus flash, `treasurecount`, lives/`GiveExtraMan`, weapon switching) are dropped — weapon
   pickups still grant their `GiveAmmo(6)`, and kill-points are not awarded (score is treasure only).
+- **Enemy-death drops are runtime-spawned items.** id's `KillActor` (`WL_STATE.C`) calls `PlaceItemType`
+  to drop loot at the corpse tile — a guard/officer leaves a used clip (`bo_clip2`), an SS a machine gun
+  (`bo_machinegun`), a dog nothing. The oracle's `KillActor` does the same `SpawnStatic`. But the
+  Solidity `Map` items are **immutable** (static tile/type + a taken-bitmask), so a drop — which appears
+  mid-game at a tile the Map never knew about — can't be a Map item. The Engine carries it instead in a
+  small **sparse drop list** in the packed state (a word each: tile + itemnumber + taken, like the
+  active-door / pushwall lists), appended on each kill and reconstructed every tick; the player grabs it
+  via the same player-on-tile `GetBonus` as a Map item. Faithful effects (`bo_clip2` → +4 ammo, etc.);
+  id's `PlaceItemType` free-slot search over the static array is dropped (we just append). The death
+  *tile* is `KillActor`'s `ob->x >> TILESHIFT`, identical on both sides, so the differential holds
+  (scenarios `kill_guard`/`kill_ss`/`kill_officer` create a drop, `kill_loot` walks the player onto one).
 - **All actors think every tic.** Wolf3D gates an actor's processing on `ob->active`, which the
   renderer flips on when the actor is drawn. Headless, there's no renderer, so we process every
   actor every tic (like `FL_VISABLE`, an identical-on-both-sides choice). This is what lets a
@@ -177,7 +195,10 @@ are deviations from id's *render-coupled* code, not between our two implementati
   (random for guard/SS/dog, a constant `2` with NO RNG draw for the officer) are class-specific — a
   faithfulness detail that was hardcoded to the guard until the dog/officer forced it out (the
   consistent-but-wrong oracle+Engine had hidden it from the differential). Spawns carry a class byte
-  (`tilex,tiley,dir,class`).
+  (`tilex,tiley,dir,class`). In Solidity this graph is a **packed `GSTATES` byte table** (4 bytes/state:
+  tictime|think|action|next) read by index, and the per-`obclass` constants come from one `_classInfo`
+  helper — both shrink the Engine bytecode (a 71-branch `if`-chain and ~5 duplicated dispatch chains
+  collapse) to keep it under EIP-170's 24,576-byte limit after the enemy-death drops were added.
 - **Actor-vs-actor collision** is modeled by scanning the actor list for a shootable actor on the
   target tile, rather than id's `actorat` grid — equivalent here because each actor's `(tilex,tiley)`
   is its grid mark (id's clear-at-start/mark-at-end falls out of reading live positions in actor

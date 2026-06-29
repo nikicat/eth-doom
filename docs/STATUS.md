@@ -51,9 +51,14 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
   `doorposition`). Sound is **localized by id's area graph** (`ConnectAreas`/`areabyplayer`): gunfire
   only alerts guards in the player's area + rooms reachable through OPEN doors — a closed door keeps a
   room's guards asleep, exactly like the original.
-- **Pickups** — bonus items (`SpawnStatic`/`GetBonus`): walk onto a clip/first-aid/key/treasure to
-  take it — ammo/health with id's clamps + "skip if full" guards, treasure → score, keys → the keyring
-  (a **gold/silver key unlocks its locked door** in `OperateDoor`). Items vanish as they're consumed.
+- **Pickups + enemy loot** — bonus items (`SpawnStatic`/`GetBonus`): walk onto a clip/first-aid/key/
+  treasure to take it — ammo/health with id's clamps + "skip if full" guards, treasure → score, keys →
+  the keyring (a **gold/silver key unlocks its locked door** in `OperateDoor`). Items vanish as they're
+  consumed. **Dead enemies drop loot** (`KillActor` → `PlaceItemType`): a killed guard/officer leaves a
+  used clip (+4 ammo), an SS a machine gun, a dog nothing — picked up by walking onto the corpse tile,
+  just like any bonus. Map items are static (immutable `Map` + a taken-bitmask); a drop is **runtime-
+  spawned**, so it rides a small sparse list in the packed state (one word: tile + item + taken),
+  reconstructed each tick — differential-verified bit-for-bit (`kill_loot` exercises the full pickup).
 - **The full E1 enemy roster** — guard, **SS** (100 HP, 4-shot burst), **officer** (50 HP, speed ×5,
   fast single shot), and the melee **dog** (`T_DogChase`/`T_Bite`: rushes and leaps to bite, 1 HP,
   can't open doors). Guard/SS/officer share `T_Chase`/`T_Shoot`; all four live in one state table with
@@ -136,31 +141,33 @@ A complete single-guard PvE loop, on the EVM, differential-verified:
 
 | scenario | what | min | avg | max |
 |---|---|---|---|---|
-| `move_basic` | movement only | 79.6k | 84.6k | 100.1k |
-| `chase_guard` | guard chases + shoots you (151 tics) | 86.2k | 91.7k | 112.2k |
-| `kill_guard` | you fire + kill the guard (81 tics) | 86.4k | 89.3k | 120.3k |
-| `door_use` | walk up to a door, Use it, pass through (151 tics) | 85.7k | 92.3k | 132.4k |
-| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 88.1k | 95.6k | 122.7k |
-| `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 96.3k | 104.1k | 132.0k |
-| `two_guards` | two guards chase; the rear can't walk through the front (141 tics) | 95.6k | 110.4k | 134.5k |
-| `kill_ss` | an SS (100 HP, 4-shot burst) chases, fires, and dies (221 tics) | 86.3k | 92.2k | 120.6k |
-| `dog_bite` | a dog (1 HP, fast, melee) rushes the player and leaps to bite (261 tics) | 87.0k | 89.6k | 116.1k |
-| `kill_officer` | an officer (50 HP, speed ×5, constant reaction) chases, fires, dies (171 tics) | 87.0k | 94.8k | 121.2k |
-| `level_exit` | walk into the elevator switch, end the level, sim freezes (41 tics) | 75.1k | 80.1k | 104.9k |
-| `multi_push` | push two secret walls; both slide at once (one finishes mid-slide of the other) (431 tics) | 89.4k | 100.9k | 144.5k |
+| `move_basic` | movement only | 80.6k | 85.6k | 101.1k |
+| `chase_guard` | guard chases + shoots you (151 tics) | 87.6k | 93.3k | 113.6k |
+| `kill_guard` | you fire + kill the guard, which drops a clip (81 tics) | 90.5k | 93.4k | 131.9k |
+| `kill_loot` | kill a guard, then walk onto the dropped clip (ammo +4) (101 tics) | 90.8k | 95.0k | 127.3k |
+| `door_use` | walk up to a door, Use it, pass through (151 tics) | 86.7k | 93.3k | 133.4k |
+| `door_guard` | guard wakes on noise, opens a door, comes through (342 tics) | 89.8k | 97.3k | 124.3k |
+| `item_pickup` | grab clip/key/treasure, get shot, heal on a first-aid (151 tics) | 98.0k | 105.7k | 133.7k |
+| `two_guards` | two guards chase; the rear can't walk through the front (141 tics) | 97.4k | 112.7k | 136.3k |
+| `kill_ss` | an SS (100 HP, 4-shot burst) chases, fires, dies + drops a machine gun (221 tics) | 89.9k | 94.6k | 132.0k |
+| `dog_bite` | a dog (1 HP, fast, melee) rushes the player and leaps to bite (261 tics) | 87.6k | 89.3k | 116.6k |
+| `kill_officer` | an officer (50 HP, speed ×5) chases, fires, dies + drops a clip (171 tics) | 89.9k | 95.9k | 130.4k |
+| `level_exit` | walk into the elevator switch, end the level, sim freezes (41 tics) | 75.7k | 80.7k | 105.6k |
+| `multi_push` | push two secret walls; both slide at once (one finishes mid-slide of the other) (431 tics) | 90.1k | 101.6k | 145.1k |
 
 `submitInput` gas is the true per-input cost a player pays — ~75–135k with a live guard + door + items
 on the 16×16 test map, a fraction of a cent on a cheap L2 (the level-end **freeze** makes a completed
 session's ticks the cheapest of all — it short-circuits before any sim work). Map data is stored
 **SSTORE2-style** (read each tick with one `EXTCODECOPY`), doors are **sparse** (only non-closed ones get
-a state word), and items pack into a taken-bitmask. The `rust/harness` E1L1 probe splits the real
-per-tick cost (it calls `engine.tick` as a view to isolate compute from the `Session` write):
+a state word), items pack into a taken-bitmask, and enemy-death drops are a sparse trailing list (only
+once an enemy dies). The `rust/harness` E1L1 probe splits the real per-tick cost (it calls `engine.tick`
+as a view to isolate compute from the `Session` write):
 
 ```
-E1L1 submitInput  ~275k  =  engine compute ~226k          +  Session/tx overhead ~49k (21k base + state I/O)
-                            ├ tilemap 64x64 + trig/rng + codec  ~65k
-                            ├ 22 doors + 48 items load/scan      ~62k
-                            └ 12-guard AI (CheckLine etc.)       ~99k
+E1L1 submitInput  ~282k  =  engine compute ~233k          +  Session/tx overhead ~49k (21k base + state I/O)
+                            ├ tilemap 64x64 + trig/rng + codec  ~66k
+                            ├ 22 doors + 48 items load/scan      ~63k
+                            └ 12-guard AI (CheckLine etc.)      ~104k
 ```
 
 The **engine compute dominates** (not the `Session` write — that's only ~28k beyond the base tx).
@@ -177,13 +184,14 @@ Per `DESIGN.md`: the C `sim_oracle` (carved from id's source) replays an input v
 per-tick **golden vectors**; the Rust harness deploys the contracts on anvil, replays the same
 inputs through `Session.submitInput`, and asserts the decoded state matches the golden vector
 **tic-by-tic** (player pose/health/ammo/weapon/bestweapon/keys/score, every guard field, every door's
-position/action/ticcount, every item's taken bit, obclass, the RNG index, the `exit` latch, and every
-pushwall record — over single-guard, multi-guard, SS, dog, officer, area-localization, blocking-collision,
-weapon-switching, single- and multi-pushwall, and level-exit scenarios). All sixteen scenarios pass.
+position/action/ticcount, every item's taken bit, obclass, the RNG index, the `exit` latch, every
+pushwall record, and every enemy-death drop's tile/item/taken — over single-guard, multi-guard, SS, dog,
+officer, area-localization, blocking-collision, weapon-switching, single- and multi-pushwall, level-exit,
+and enemy-death-drop scenarios). All seventeen scenarios pass.
 
 The **wasm predictor is held to the same bar**: `oracle/verify_wasm.mjs` replays every golden
 scenario through `web/public/predict.wasm` and asserts its decoded packed state matches the golden
-vectors tic-by-tic (all sixteen pass). So the same carved C is differential-verified compiled
+vectors tic-by-tic (all seventeen pass). So the same carved C is differential-verified compiled
 two ways — natively (`sim_oracle`, the ground truth) and to wasm (the browser predictor) — and the
 client additionally reconciles each predicted tick against `Session.getState()` live.
 
@@ -198,7 +206,7 @@ ergonomics, renderer regression, and oracle fidelity; they don't replace the foc
 
 | | status | scope |
 |---|---|---|
-| **T1** self-describing scenarios + auto-discovery | ✅ | one `scenarios/<name>.json` per scenario = `{note, map, player spawn, enemy spawns, checkpoints}`; `gen_vectors.sh` (jq) / `harness` (serde) / `verify_wasm.mjs` (JSON) all **auto-discover** `scenarios/*.json` — the config that was triplicated across the three (adding `block_static` meant editing all three, in three orderings — one even had the enemy tuple in a different field order) is now single-sourced with **named** fields. Adding a test = drop `scenarios/<name>.json` + `vectors/<name>.input.txt` and run `gen_vectors.sh`. Goldens regenerate **byte-identical** (zero regression); harness + `verify_wasm` pass 16/16. (Input `.input.txt` is referenced, not inlined, to keep its authored per-phase comments; `checkpoints` defaults `"all"` = every tic, with an explicit tic-list honored for the future T3/T4 renderer frames. `engine-commit` is deferred to T2, where the on-chain immutable `engine` is the natural pin.) |
+| **T1** self-describing scenarios + auto-discovery | ✅ | one `scenarios/<name>.json` per scenario = `{note, map, player spawn, enemy spawns, checkpoints}`; `gen_vectors.sh` (jq) / `harness` (serde) / `verify_wasm.mjs` (JSON) all **auto-discover** `scenarios/*.json` — the config that was triplicated across the three (adding `block_static` meant editing all three, in three orderings — one even had the enemy tuple in a different field order) is now single-sourced with **named** fields. Adding a test = drop `scenarios/<name>.json` + `vectors/<name>.input.txt` and run `gen_vectors.sh`. Goldens regenerate **byte-identical** (zero regression); harness + `verify_wasm` pass 17/17. (Input `.input.txt` is referenced, not inlined, to keep its authored per-phase comments; `checkpoints` defaults `"all"` = every tic, with an explicit tic-list honored for the future T3/T4 renderer frames. `engine-commit` is deferred to T2, where the on-chain immutable `engine` is the natural pin.) |
 | **T2** browser demo record → corpus | ⬜ | the client logs its per-tick `cmd()` stream (+ a periodic state hash) to a downloadable demo — playing the game authors tests; grow the corpus from real play. The on-chain `Session` history is itself a replayable demo corpus (immutable `engine` per session ⟹ a past game reproduces bit-for-bit). |
 | **T3** renderer pixel-match — WASM framebuffer (bit-exact, headless) | ✅ | `renderer/verify_render.mjs` drives the SAME wall renderer (`wolfrender.c`) headless under Node (`build_headless.sh` → `-sENVIRONMENT=node`), feeding each committed golden vector's pose+doors as the camera (`px=(x/65536)·64`, `pa=angle`, `doorf=act?pos/0xffff:1`), and hashing the 320×160 RGBA framebuffer **+ the depth buffer** per tic — exact compare vs committed `vectors/<name>.render.json`. Procedural art (`npages=0` → the texture-free two-tone fallback) keeps it asset-free + deterministic; pure integer/double math, never flaky. Covers projection (`CalcHeight`), the fisheye fix, the grid-DDA cast, flat lighting, and the door slide. Proven to have teeth (a 1° FOV change fails every scenario; revert restores). Texture sampling (the has-art branch) is out of scope — needs committed id art. Goldens regenerate on an intentional renderer **or** sim-trajectory change (same `--write` contract as the differential goldens). |
 | **T4** renderer pixel-match — composited `#view` (tolerant, browser) | ⬜ | the 3D viewport only (walls + sprites + gun + scenery) — **rendered frame only; HUD / minimap / `fillText` / fonts out of scope**. Pinned headless Chromium, a **fixed render clock** (`renderView` is clock-parameterized → deterministic gun bob / muzzle / flash, and lets us skip death-overlay text frames), a **subset of stable checkpoint frames**, pixel-diff with a small per-channel tolerance + max-diff-% threshold. Procedural goldens committed; real-VSWAP goldens are local/gitignored (same licensing as the art). |
@@ -255,14 +263,18 @@ anvil --silent &
   the browser tab is already the title, and the level-intermission tally already shipped in M6.4.
 - **M9** (MegaETH) — blocked on an RPC + funded key: deploy to testnet, fire-and-forget session-key play
   at ~native rate, end-to-end latency + gas.
-- **Backlog — enemy death drops** (faithfulness gap, sim-path): id's `KillActor` (`WL_STATE.C`) drops
-  ammo at the corpse tile via `PlaceItemType` (guard/officer → `bo_clip2`, SS → `bo_machinegun`, dog →
-  nothing); the carved oracle `KillActor` (`oracle/src/wl_actor.c`) omits it, so dead enemies leave no
-  ammo. Porting it faithfully needs a **runtime-spawned-item** model — today items are static from the
-  immutable `Map` + a taken-bitmask, so a dropped clip isn't representable. The shape: a sparse
-  dropped-items list in consensus state (like the door/pushwall lists), mirrored oracle↔Engine (the wasm
-  predictor follows for free), regenerated differential vectors (`kill_*` gain a drop + a pickup), and
-  client decode/render/audio for the drop (the `GETAMMO`/`GETMACHINE` SFX already exist). Deferred.
+- **Enemy death drops ✅ done** (faithfulness, sim-path): id's `KillActor` (`WL_STATE.C`) drops loot at
+  the corpse tile via `PlaceItemType` — guard/officer a used clip (`bo_clip2`, +4 ammo), SS a machine
+  gun (`bo_machinegun`), dog nothing. Modeled as a **runtime-spawned-item** list in consensus state (a
+  sparse `numdrops@56` + one word/drop `tilex|tiley|itemnumber|taken`, like the door/pushwall lists),
+  since the Map's items are static. Mirrored oracle↔Engine (the wasm predictor follows for free) and
+  differential-verified bit-for-bit — `kill_*` now carry the drop, and **`kill_loot`** walks the player
+  onto a dropped clip (taken flip + ammo +4). The client decodes the drops, billboards them as floor
+  markers, and plays the pickup SFX on the taken flip. Fitting it under EIP-170 needed the Engine code
+  trims noted below (the state-graph byte table + `_classInfo`).
 - **Gas** — state re-pack ✅, SSTORE2 map/doors/items ✅, item raw-bytes ✅. Remaining levers: per-actor
   packing (re-encoding every actor each tick), culling dead actors (corpses linger), and giving doors the
-  raw-bytes treatment. The Engine sits ~10 B under EIP-170's 24,576-byte limit (see `foundry.toml`).
+  raw-bytes treatment. The Engine now runs ~23.7k with ~0.9k of EIP-170 headroom after the M-drops trims
+  (`GSTATES` byte table replacing a 71-branch chain; `_classInfo` centralizing per-class dispatch). One
+  cost: `_gstate` reads the packed table (a small per-call copy), so per-tick gas rose ~1–3% (E1L1 ~275k
+  → ~282k) — recoverable by reading the table without the full copy if it matters (see `foundry.toml`).
