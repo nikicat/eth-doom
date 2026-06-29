@@ -458,6 +458,24 @@ const mctx = mapC.getContext("2d")!;
 
 const dbg = document.getElementById("dbg")!;
 
+// --- M8 demo shell: start/thesis card ---------------------------------------
+// The card is shown over the view while assets load + the stack deploys behind it,
+// so the click that dismisses it lands on a ready game. The click is also the user
+// gesture browsers require to start the AudioContext (autoplay policy). The tx loop
+// awaits `started` before its first submitInput, so play begins on the click.
+const startCard = document.getElementById("start")!;
+let releaseStart: () => void;
+const started = new Promise<void>((res) => (releaseStart = res));
+startCard.addEventListener(
+  "click",
+  () => {
+    startCard.classList.add("hidden");
+    audio?.unlock(); // first user gesture — resume the AudioContext + start music
+    releaseStart();
+  },
+  { once: true },
+);
+
 // ---------------------------------------------------------------------------
 // first-person raycaster
 //
@@ -1610,6 +1628,7 @@ async function main() {
   // exact even when setTimeout overshoots; the catch-up cap avoids a spiral after the tab
   // is backgrounded (throttled timers). Rendering stays at 60fps via rAF, independent.
   const DT = 1000 / TICK_HZ;
+  await started; // M8 demo shell: hold input until the player clicks the start card
   let nextAt = performance.now();
 
   for (;;) {

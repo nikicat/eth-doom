@@ -8,8 +8,22 @@
       body { margin: 0; background: #0c0c0e; color: #cdd; font: 13px ui-monospace, monospace; }
       h1 { font-size: 15px; margin: 10px 16px 6px; color: #6cf; font-weight: 600; }
       .wrap { display: flex; gap: 16px; padding: 12px 16px; flex-wrap: wrap; align-items: flex-start; }
-      .game { display: flex; flex-direction: column; gap: 0; }
+      .game { display: flex; flex-direction: column; gap: 0; position: relative; }
       canvas { image-rendering: pixelated; display: block; }
+      /* M8 demo shell: a start/thesis card over the view that doubles as the
+         audio-unlock gesture; the deploy runs behind it so click -> instant play. */
+      #start {
+        position: absolute; inset: 0; z-index: 10; box-sizing: border-box;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 14px; padding: 0 36px; text-align: center; cursor: pointer;
+        background: rgba(8, 8, 10, 0.93); backdrop-filter: blur(1px);
+      }
+      #start.hidden { display: none; }
+      #start h2 { margin: 0; font-size: 22px; color: #6cf; font-weight: 600; letter-spacing: 0.5px; }
+      #start .thesis { max-width: 470px; line-height: 1.55; color: #9ab; }
+      #start .controls { line-height: 1.8; color: #9cf; }
+      #start .go { margin-top: 4px; color: #fd6; font-weight: 600; }
+      #start b { color: #fd6; }
       /* Wolf3D-native internal res (320x160 view + 320x40 bar) displayed at 4:3:
          x2 horizontal, x2.4 vertical is the 320x200 -> 4:3 pixel-aspect stretch. */
       #view { border: 1px solid #000; background: #000; width: 640px; height: 384px; }
@@ -27,6 +41,20 @@
       <div class="game">
         <canvas id="view" width="320" height="160"></canvas>
         <canvas id="hud" width="320" height="40"></canvas>
+        <div id="start">
+          <h2>eth-doom</h2>
+          <div class="thesis">
+            A <b>Wolfenstein 3D</b> world simulation running as an <b>EVM smart contract</b> —
+            the chain is the authoritative, deterministic netcode. Rendering &amp; audio are
+            off-chain; everything you see is decoded from the contract's <code>getState()</code>,
+            one <code>submitInput</code> tx per tick.
+          </div>
+          <div class="controls">
+            <b>W</b>/<b>S</b> or <b>↑</b>/<b>↓</b> move · <b>A</b>/<b>D</b> strafe ·
+            <b>←</b>/<b>→</b> turn · <b>Space</b> fire · <b>E</b> use/open · <b>M</b> mute
+          </div>
+          <div class="go">▶ Click to start</div>
+        </div>
       </div>
       <div class="side">
         <canvas id="map" width="200" height="200"></canvas>
