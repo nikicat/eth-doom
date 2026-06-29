@@ -971,15 +971,15 @@ function renderView(s: State, clock: number, fx: Fx) {
   }
 
   if (s.player.health <= 0) {
-    // Wolf3D death sequence: the view sinks while the screen fades to red over ~1.1s,
-    // then "YOU DIED". (Render-only; the sim just reports health <= 0.)
+    // Wolf3D death sequence: the view sinks toward the floor while the screen fades to red
+    // over ~1.1s, then "YOU DIED". (Render-only; the sim just reports health <= 0.)
     if (deathAt === 0) deathAt = clock;
     const t = Math.min(1, (clock - deathAt) / 1100);
     const sink = Math.floor(t * VH * 0.55);
     if (sink > 0) {
-      vctx.drawImage(view, 0, 0, VW, VH, 0, sink, VW, VH); // shift the composed scene down
+      vctx.drawImage(view, 0, 0, VW, VH, 0, -sink, VW, VH); // eye drops to the floor: scene slides up
       vctx.fillStyle = "#000";
-      vctx.fillRect(0, 0, VW, sink); // black above the sinking view
+      vctx.fillRect(0, VH - sink, VW, sink); // darkness rising from below
     }
     vctx.fillStyle = `rgba(150,0,0,${0.72 * t})`; // screen reddens
     vctx.fillRect(0, 0, VW, VH);
