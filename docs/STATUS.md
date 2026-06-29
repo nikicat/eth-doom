@@ -254,6 +254,14 @@ anvil --silent &
   the browser tab is already the title, and the level-intermission tally already shipped in M6.4.
 - **M9** (MegaETH) — blocked on an RPC + funded key: deploy to testnet, fire-and-forget session-key play
   at ~native rate, end-to-end latency + gas.
+- **Backlog — enemy death drops** (faithfulness gap, sim-path): id's `KillActor` (`WL_STATE.C`) drops
+  ammo at the corpse tile via `PlaceItemType` (guard/officer → `bo_clip2`, SS → `bo_machinegun`, dog →
+  nothing); the carved oracle `KillActor` (`oracle/src/wl_actor.c`) omits it, so dead enemies leave no
+  ammo. Porting it faithfully needs a **runtime-spawned-item** model — today items are static from the
+  immutable `Map` + a taken-bitmask, so a dropped clip isn't representable. The shape: a sparse
+  dropped-items list in consensus state (like the door/pushwall lists), mirrored oracle↔Engine (the wasm
+  predictor follows for free), regenerated differential vectors (`kill_*` gain a drop + a pickup), and
+  client decode/render/audio for the drop (the `GETAMMO`/`GETMACHINE` SFX already exist). Deferred.
 - **Gas** — state re-pack ✅, SSTORE2 map/doors/items ✅, item raw-bytes ✅. Remaining levers: per-actor
   packing (re-encoding every actor each tick), culling dead actors (corpses linger), and giving doors the
   raw-bytes treatment. The Engine sits ~10 B under EIP-170's 24,576-byte limit (see `foundry.toml`).
