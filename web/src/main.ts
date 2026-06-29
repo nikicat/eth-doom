@@ -476,6 +476,17 @@ startCard.addEventListener(
   { once: true },
 );
 
+// --- M8 demo shell: restart ("New game") -----------------------------------
+// Redeploy a fresh Session against the same immutable engine+map (no page reload,
+// no re-fetch of assets/wasm) and reset client state. `runSession` (below) is
+// re-invokable; a generation token cancels the previous session's loops.
+const newGameBtn = document.getElementById("newgame") as HTMLButtonElement;
+let sessionGen = 0; // bumped per runSession; a stale session's loops exit when gen != this
+let suspendView = false; // freeze the render loop briefly during a session swap
+let restartSession: (() => void) | null = null; // set in main() once engine+map exist
+const triggerRestart = () => { if (!newGameBtn.disabled) restartSession?.(); };
+newGameBtn.addEventListener("click", triggerRestart);
+
 // ---------------------------------------------------------------------------
 // first-person raycaster
 //
@@ -1358,6 +1369,7 @@ addEventListener("keydown", (e) => {
   keys.add(k);
   audio?.unlock(); // browsers need a user gesture to start the AudioContext
   if (k === "m") audio?.toggleMute();
+  if (k === "enter") triggerRestart(); // M8: new game (redeploy a fresh Session)
   if ([" ", "arrowleft", "arrowright", "arrowup", "arrowdown"].includes(k)) e.preventDefault();
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
@@ -1483,6 +1495,37 @@ async function main() {
     BigInt(spawnTile.x), BigInt(spawnTile.y), BigInt(spawnTile.dir),
     guardsHex(), doorsHex(), itemsHex(), areasHex(), blockersHex(), pushwallsHex(),
   ]);
+
+  // render loop — smooth fx (gun/muzzle/flash) regardless of tx cadence. Started ONCE
+  // and runs across sessions (reads the module-level `latest`); paused during a swap.
+  function frame() {
+    const clock = performance.now();
+    if (latest && !suspendView) {
+      renderView(latest, clock, fx);
+      if (assets?.pics.get(PIC_STATUSBAR)) renderHudReal(latest, assets, clock);
+      else renderHud(latest, lastGas, clock, fx);
+      renderMap(latest);
+      renderDbg(latest, tick, lastGas);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // engine + map are immutable, so a restart only redeploys the Session (M8 demo shell).
+  restartSession = () => { runSession(engine, map); };
+  await runSession(engine, map);
+}
+
+// runSession: (re)start a game on a fresh Session sharing the immutable engine+map.
+// Deploys the Session, delegates a burner, resets the per-session client state, then
+// drives the sim (fire-and-forget tx loop + parallel reconciler). A generation token
+// makes a newer call cancel this one's loops, so "New game" is a clean in-place restart.
+async function runSession(engine: Address, map: Address) {
+  const gen = ++sessionGen;
+  newGameBtn.disabled = true;
+  suspendView = true; // freeze the view over the swap (avoids a stale-tilemap frame)
+  dbg.textContent = "deploying a fresh session…";
+
   // owner = our dev account (the "main wallet"). It signs exactly once below to
   // delegate a session key; from then on the burner signs every tick.
   const session = await deploy(SessionA, [engine, map, account.address]);
@@ -1509,12 +1552,24 @@ async function main() {
   });
   sessionKeyLabel = `${shortAddr(account.address)} → ${shortAddr(burner.address)} (key)`;
   console.log(`[session key] owner ${account.address} delegated burner ${burner.address} until ${expiry}`);
+  if (gen !== sessionGen) return; // a newer "New game" superseded this deploy mid-flight
 
   const getStateHex = async (): Promise<Hex> =>
     (await pub.readContract({ address: session, abi: SessionA.abi, functionName: "getState" })) as Hex;
 
   const initHex = await getStateHex();
   latest = decode(initHex);
+
+  // fresh per-session reset of the render-side state (the chain + predictor are new):
+  // drop any prior pushwall moves so the predictor re-seeds from the base tilemap and the
+  // renderer shows base geometry; clear the death / level-end / fx sequences.
+  tiles.set(baseTiles);
+  pwoffLive.fill(0);
+  if (wall) wall.syncTiles([...Array(W * H).keys()]); // push the base tilemap to the wasm renderer
+  deathAt = 0; levelEndAt = 0; levelEndScore = 0;
+  fx.muzzleUntil = fx.recoilUntil = fx.damageUntil = 0;
+  tick = 0; lastGas = null; tps = 0;
+  suspendView = false; // resume rendering — now on the fresh spawn
 
   // load the wasm predictor and verify its spawn is byte-identical to the chain's
   const predictor = await loadPredictor();
@@ -1531,20 +1586,6 @@ async function main() {
     );
   }
   let predOk = 0, predTotal = 0, confTick = 0;
-
-  // render loop — smooth fx (gun/muzzle/flash) regardless of tx cadence
-  function frame() {
-    const clock = performance.now();
-    if (latest) {
-      renderView(latest, clock, fx);
-      if (assets?.pics.get(PIC_STATUSBAR)) renderHudReal(latest, assets, clock);
-      else renderHud(latest, lastGas, clock, fx);
-      renderMap(latest);
-      renderDbg(latest, tick, lastGas);
-    }
-    requestAnimationFrame(frame);
-  }
-  requestAnimationFrame(frame);
 
   // rolling tickrate: count confirmations in the last second
   const confTimes: number[] = [];
@@ -1600,6 +1641,7 @@ async function main() {
   (async function reconcile() {
     for (;;) {
       await sleep(1000);
+      if (gen !== sessionGen) return; // session was restarted — stop the old reconciler
       if (!predictEnabled) continue;
       try {
         const bn = await pub.getBlockNumber();
@@ -1628,10 +1670,13 @@ async function main() {
   // exact even when setTimeout overshoots; the catch-up cap avoids a spiral after the tab
   // is backgrounded (throttled timers). Rendering stays at 60fps via rAF, independent.
   const DT = 1000 / TICK_HZ;
-  await started; // M8 demo shell: hold input until the player clicks the start card
+  await started; // M8 demo shell: hold input until the player clicks the start card (first run only)
+  if (gen !== sessionGen) return; // superseded while waiting on the gate
+  newGameBtn.disabled = false; // game is live — allow "New game"
   let nextAt = performance.now();
 
   for (;;) {
+    if (gen !== sessionGen) return; // a newer "New game" took over — stop this tx loop
     // level over (elevator): the sim is frozen on-chain and in the predictor, so stop
     // submitting no-op ticks — the render loop plays the level-complete intermission.
     if (latest?.exit) { console.log(`[level] completed @ tick ${tick} — sim frozen, halting input`); break; }
